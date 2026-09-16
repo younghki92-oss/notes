@@ -4,7 +4,7 @@
    ───────────────────────────────────────────── */
 
 :root {
-  --build: 'v8';
+  --build: 'v9';
   --paper:      #FCFCFA;
   --paper-2:    #F4F3EF;
   --ink:        #1C1D1A;
@@ -74,6 +74,8 @@ button { cursor: pointer; }
 
 /* ── 레이아웃 ───────────────────────────────── */
 
+/* 배치는 오직 .app[data-pane] 이 정합니다.
+   both = 둘 다 / list = 목록만 / editor = 편집기만 */
 .app {
   display: grid;
   grid-template-columns: var(--list-w) minmax(0, 1fr);
@@ -82,6 +84,10 @@ button { cursor: pointer; }
   max-width: 100vw;
   overflow: hidden;
 }
+.app[data-pane="list"],
+.app[data-pane="editor"] { grid-template-columns: minmax(0, 1fr); }
+.app[data-pane="list"] .pane-editor { display: none; }
+.app[data-pane="editor"] .pane-list { display: none; }
 
 .pane-list {
   display: flex;
@@ -629,17 +635,9 @@ code { font-family: var(--mono); font-size: .9em; }
 
 /* ── 좁은 화면: 한 화면씩 ─────────────────────── */
 
-.only-narrow { display: none; }
-
 @media (max-width: 760px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
-  .pane-list, .pane-editor { grid-area: 1 / 1; }
-  .pane-editor { display: none; }
-  .app[data-view="editor"] .pane-list { display: none; }
-  .app[data-view="editor"] .pane-editor { display: flex; }
-  .only-narrow { display: flex; }
-  /* 편집 중에도 새 노트를 바로 시작할 수 있게 */
-  .app[data-view="editor"] .fab { display: grid; }
+  /* 좁은 화면에서는 편집 중에도 새 노트를 바로 시작할 수 있게 */
+  .app[data-pane="editor"] .fab { display: grid; }
   .editor, .preview { padding-left: 18px; padding-right: 18px; }
   .sheet { padding: 0; align-items: end; }
   .sheet-panel {
@@ -669,16 +667,22 @@ code { font-family: var(--mono); font-size: .9em; }
 .fab:active { transform: scale(.94); }
 
 .back-btn {
-  display: none;
+  display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 5px;
   background: transparent;
   border: 0;
   border-radius: var(--radius);
   padding: 7px 9px 7px 5px;
   font-size: 14px;
-  color: var(--accent);
+  color: var(--ink-soft);
   flex: none;
+}
+.back-btn:hover { background: var(--paper-2); color: var(--ink); }
+.app[data-pane="both"] .back-btn { color: var(--accent); }
+
+@media (max-width: 560px) {
+  .back-label { display: none; }
 }
 
 /* ── 손가락으로 쓰는 기기 (폴드·갤럭시) ────────── */

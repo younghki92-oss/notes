@@ -14,7 +14,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v8';
+const BUILD = 'v9';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -267,13 +267,47 @@ async function reload() {
 
 /* ── 편집 ──────────────────────────────────── */
 
+const narrowQuery = window.matchMedia('(max-width: 760px)');
+
+/** 지금 화면이 좁은가 (한 번에 한 칸만 보여야 하는가) */
+const isNarrow = () => narrowQuery.matches;
+
+/**
+ * 화면 배치를 정합니다. 'both' | 'list' | 'editor'
+ * 좁은 화면에서는 both 를 쓰지 않습니다.
+ */
+function setPane(mode) {
+  let m = mode;
+  if (isNarrow() && m === 'both') m = current ? 'editor' : 'list';
+  if (!isNarrow() && m === 'list') m = 'both';
+  if (m === 'editor' && !current) m = isNarrow() ? 'list' : 'both';
+  el.app.dataset.pane = m;
+  const showing = m !== 'list';
+  $('btnBack')?.setAttribute('aria-pressed', String(m === 'both'));
+  return m;
+}
+
+const pane = () => el.app.dataset.pane || 'both';
+
+/** 목록 보이기/숨기기 (애플 노트의 사이드바 버튼과 같은 역할) */
+function toggleList() {
+  flushSave();
+  if (isNarrow()) {
+    setPane(pane() === 'list' ? 'editor' : 'list');
+  } else {
+    setPane(pane() === 'both' ? 'editor' : 'both');
+  }
+}
+
 function showEditor(on) {
   el.empty.hidden = on;
   el.editor.hidden = !on;
-  if (!on) { el.preview.hidden = true; $('btnPreview')?.setAttribute('aria-pressed', 'false'); }
-  if (window.matchMedia('(max-width: 760px)').matches) {
-    el.app.dataset.view = on ? 'editor' : 'list';
+  if (!on) {
+    el.preview.hidden = true;
+    $('btnPreview')?.setAttribute('aria-pressed', 'false');
   }
+  if (on) setPane(isNarrow() ? 'editor' : 'both');
+  else setPane(isNarrow() ? 'list' : 'both');
 }
 
 async function select(id) {
@@ -286,7 +320,7 @@ async function select(id) {
   showEditor(true);
   drawList();
   if (!el.preview.hidden) el.preview.innerHTML = await renderBody(current.body);
-  if (!window.matchMedia('(max-width: 760px)').matches) el.editor.focus();
+  if (!isNarrow()) el.editor.focus();
 }
 
 function drawStats() {
@@ -551,7 +585,7 @@ on('selDelete', 'click', async () => {
   await removeNotes(ids);
   toast(`${n}개를 삭제했습니다`);
 });
-on('btnBack', 'click', () => { flushSave(); el.app.dataset.view = 'list'; });
+on('btnBack', 'click', toggleList);
 
 on('btnPreview', 'click', async e => {
   await flushSave();
@@ -658,13 +692,12 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// 폴드를 접고 펼 때 한 화면/두 화면 배치를 다시 맞춥니다.
-const narrowQuery = window.matchMedia('(max-width: 760px)');
+// 폴드를 접고 펼 때 배치를 다시 맞춥니다.
 function fitLayout() {
-  if (narrowQuery.matches) {
-    if (!el.app.dataset.view) el.app.dataset.view = current ? 'editor' : 'list';
+  if (isNarrow()) {
+    if (pane() === 'both') setPane(current ? 'editor' : 'list');
   } else {
-    delete el.app.dataset.view;
+    if (pane() === 'list') setPane('both');
     if (!current && notes.length) select(notes[0].id);
   }
 }
@@ -709,7 +742,8 @@ setInterval(() => { if (document.visibilityState === 'visible') scheduleSync(0);
   }
 
   showEditor(false);
-  if (!window.matchMedia('(max-width: 760px)').matches && notes.length) await select(notes[0].id);
+  setPane(isNarrow() ? 'list' : 'both');
+  if (!isNarrow() && notes.length) await select(notes[0].id);
 
   if (drive.wasConnected()) scheduleSync(1500);
   updateSyncBadge();
