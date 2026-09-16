@@ -5,7 +5,8 @@
 
 import * as db from './db.js';
 import * as drive from './drive.js';
-import { render, splitFrontmatter } from './markdown.js';
+import { render, splitFrontmatter, setAttachmentUrls } from './markdown.js';
+import { measure, shortLabel, fullLabel } from './stats.js';
 import { exportMarkdown, exportDocx, printNote, exportAllZip } from './export.js';
 
 const $ = id => document.getElementById(id);
@@ -14,7 +15,7 @@ const el = {
   app: $('app'), list: $('noteList'), search: $('search'), tagBar: $('tagBar'),
   editor: $('editor'), preview: $('preview'), empty: $('empty'), stamp: $('stamp'),
   syncDot: $('syncDot'), syncLabel: $('syncLabel'), toast: $('toast'),
-  sheet: $('sheet'), moreMenu: $('moreMenu'),
+  sheet: $('sheet'), moreMenu: $('moreMenu'), stats: $('stats'),
 };
 
 let notes = [];
@@ -22,7 +23,27 @@ let current = null;
 let query = '';
 let activeTag = null;
 let saveTimer = null;
+let statsFull = false;
 let syncTimer = null;
+
+/* ── 첨부 이미지 ───────────────────────────── */
+
+const attUrlCache = new Map();   // 첨부 id → blob 주소
+
+async function urlsFor(body) {
+  const ids = db.attachmentIds(body);
+  for (const id of ids) {
+    if (attUrlCache.has(id)) continue;
+    const f = await db.getFile(id);
+    if (f && f.blob) attUrlCache.set(id, URL.createObjectURL(f.blob));
+  }
+  return attUrlCache;
+}
+
+async function renderBody(body) {
+  setAttachmentUrls(await urlsFor(body));
+  return render(body);
+}
 
 /* ── 공통 ──────────────────────────────────── */
 
@@ -133,10 +154,19 @@ async function select(id) {
   if (!current) return;
   el.editor.value = current.body;
   el.stamp.textContent = when(current.modified);
+  drawStats();
   showEditor(true);
   drawList();
-  if (!el.preview.hidden) el.preview.innerHTML = render(current.body);
+  if (!el.preview.hidden) el.preview.innerHTML = await renderBody(current.body);
   if (!window.matchMedia('(max-width: 760px)').matches) el.editor.focus();
+}
+
+function drawStats() {
+  if (!current) { el.stats.textContent = ''; return; }
+  const m = measure(current.body);
+  const full = fullLabel(m);
+  el.stats.textContent = statsFull ? full : shortLabel(m);
+  el.stats.title = full ? full + ' (이 앱이 만드는 Word 판형 기준 어림값)' : '';
 }
 
 function queueSave() {
@@ -151,6 +181,7 @@ async function flushSave() {
   if (body === current.body) return;
   await db.saveBody(current, body);
   el.stamp.textContent = when(current.modified);
+  drawStats();
   await reload();
   scheduleSync();
 }
@@ -222,18 +253,59 @@ async function runSync(interactive) {
 /* ── 가져오기 ─────────────────────────────── */
 
 async function importFiles(fileList) {
-  const files = [...fileList].filter(f => /\.(md|markdown|txt)$/i.test(f.name));
-  if (!files.length) { $('importMsg').textContent = '마크다운 파일을 찾지 못했습니다.'; return; }
+  const all = [...fileList];
+  const mdFiles = all.filter(f => /\.(md|markdown|txt)$/i.test(f.name));
+  const imgFiles = all.filter(f => /\.(png|jpe?g|gif|webp|heic|tiff?)$/i.test(f.name));
 
-  let n = 0;
-  for (const f of files) {
+  if (!mdFiles.length) { $('importMsg').textContent = '마크다운 파일을 찾지 못했습니다.'; return; }
+
+  // 그림을 경로와 파일이름 두 가지로 찾을 수 있게 정리해 둡니다.
+  const byPath = new Map();
+  const byName = new Map();
+  for (const f of imgFiles) {
+    const rel = (f.webkitRelativePath || f.name).replace(/^\.?\//, '');
+    byPath.set(rel, f);
+    byPath.set(rel.split('/').slice(1).join('/'), f);   // 최상위 폴더 이름을 뺀 경로
+    byName.set(f.name, f);
+  }
+
+  const msg = $('importMsg');
+  let done = 0, attached = 0, missing = 0;
+
+  for (const f of mdFiles) {
+    msg.textContent = `가져오는 중… ${done + 1} / ${mdFiles.length}`;
+
     const text = await f.text();
     const { meta, body } = splitFrontmatter(text);
     const titleFromName = f.name.replace(/\.(md|markdown|txt)$/i, '');
-    const hasHeading = /^\s*#{1,6}\s/.test(body.split('\n').find(l => l.trim()) || '');
-    const full = hasHeading ? body : `# ${meta.title || titleFromName}\n\n${body}`;
+    const firstLine = body.split('\n').find(l => l.trim()) || '';
+    const hasHeading = /^\s*#{1,6}\s/.test(firstLine);
+    let full = hasHeading ? body : `# ${meta.title || titleFromName}\n\n${body}`;
+
+    const noteId = db.uid();
+    const dir = (f.webkitRelativePath || '').split('/').slice(0, -1).join('/');
+
+    // 본문이 가리키는 그림을 찾아 앱 안으로 옮기고, 참조를 바꿔 줍니다.
+    const refs = [...full.matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)];
+    for (const [whole, alt, rawUrl] of refs) {
+      if (/^(https?:|data:|att:)/i.test(rawUrl)) continue;
+      const url = decodeURIComponent(rawUrl);
+      const base = url.split('/').pop();
+      const file =
+        byPath.get(dir ? `${dir}/${url}` : url) ||
+        byPath.get(url) ||
+        byPath.get(dir ? `${dir}/${url}`.split('/').slice(1).join('/') : url) ||
+        byName.get(base);
+
+      if (!file) { missing++; continue; }
+      const att = db.newAttachment(file, file.name, noteId);
+      await db.putFile(att);
+      full = full.replace(whole, `![${alt || file.name}](att:${att.id})`);
+      attached++;
+    }
 
     const note = db.newNote(full, {
+      id: noteId,
       created: meta.created ? Date.parse(meta.created) || Date.now() : (f.lastModified || Date.now()),
       modified: meta.modified ? Date.parse(meta.modified) || Date.now() : (f.lastModified || Date.now()),
     });
@@ -243,12 +315,56 @@ async function importFiles(fileList) {
       note.tags = [...new Set([...note.tags, ...meta.tags.split(/[,\s]+/).filter(Boolean).map(t => t.replace(/^#/, ''))])];
     }
     await db.putNote(note);
-    n++;
+    done++;
   }
-  $('importMsg').textContent = `${n}개를 가져왔습니다.`;
+
+  msg.textContent = `노트 ${done}개, 그림 ${attached}장을 가져왔습니다.`
+    + (missing ? ` 그림 ${missing}장은 파일을 찾지 못했습니다 — 폴더째 고르셨는지 확인해 주세요.` : '');
   await reload();
   scheduleSync(1500);
-  toast(`${n}개 노트를 가져왔습니다`);
+  toast(`노트 ${done}개를 가져왔습니다`);
+}
+
+/* ── 이미지 넣기 ───────────────────────────── */
+
+async function insertImages(fileList) {
+  if (!current) return toast('노트를 먼저 고르세요');
+  await flushSave();
+  let md = '';
+  for (const f of fileList) {
+    if (!/^image\//.test(f.type)) continue;
+    const att = db.newAttachment(f, f.name, current.id);
+    await db.putFile(att);
+    md += `\n\n![${f.name}](att:${att.id})\n`;
+  }
+  if (!md) return;
+  const pos = el.editor.selectionStart ?? el.editor.value.length;
+  el.editor.value = el.editor.value.slice(0, pos) + md + el.editor.value.slice(pos);
+  await flushSave();
+  if (!el.preview.hidden) el.preview.innerHTML = await renderBody(current.body);
+  scheduleSync(1200);
+  toast('그림을 넣었습니다');
+}
+
+/** Word 내보내기에 넣을 그림들을 준비합니다. */
+async function attachmentBytes(body) {
+  const out = new Map();
+  for (const id of db.attachmentIds(body)) {
+    const f = await db.getFile(id);
+    if (!f || !f.blob) continue;
+    let w = 0, h = 0;
+    try {
+      const bmp = await createImageBitmap(f.blob);
+      w = bmp.width; h = bmp.height;
+      bmp.close?.();
+    } catch {}
+    out.set(id, {
+      bytes: new Uint8Array(await f.blob.arrayBuffer()),
+      type: f.type || f.blob.type || 'image/png',
+      name: f.name, w, h,
+    });
+  }
+  return out;
 }
 
 /* ── 설정 시트 ────────────────────────────── */
@@ -266,6 +382,16 @@ async function openSheet() {
 
 /* ── 이벤트 ───────────────────────────────── */
 
+el.stats.onclick = () => { statsFull = !statsFull; drawStats(); };
+
+// 그림 붙여넣기
+el.editor.addEventListener('paste', e => {
+  const imgs = [...(e.clipboardData?.files || [])].filter(f => /^image\//.test(f.type));
+  if (!imgs.length) return;
+  e.preventDefault();
+  insertImages(imgs);
+});
+
 el.editor.addEventListener('input', queueSave);
 el.editor.addEventListener('blur', flushSave);
 
@@ -282,7 +408,7 @@ $('btnPreview').onclick = async e => {
   el.preview.hidden = !on;
   el.editor.hidden = on;
   e.currentTarget.setAttribute('aria-pressed', String(on));
-  if (on && current) el.preview.innerHTML = render(current.body);
+  if (on && current) el.preview.innerHTML = await renderBody(current.body);
 };
 
 $('btnMore').onclick = e => {
@@ -302,9 +428,14 @@ el.moreMenu.addEventListener('click', async e => {
   el.moreMenu.hidden = true;
   await flushSave();
   if (!current) return toast('노트를 먼저 고르세요');
+  if (act === 'image') { $('imgInput').click(); return; }
   if (act === 'md') exportMarkdown(current);
-  if (act === 'docx') { exportDocx(current); toast('Word 파일을 내려받았습니다'); }
-  if (act === 'pdf') printNote(current);
+  if (act === 'docx') {
+    toast('Word 파일을 만드는 중…');
+    exportDocx(current, await attachmentBytes(current.body));
+    toast('Word 파일을 내려받았습니다');
+  }
+  if (act === 'pdf') { setAttachmentUrls(await urlsFor(current.body)); printNote(current); }
   if (act === 'delete') deleteCurrent();
 });
 
@@ -339,6 +470,7 @@ $('btnDisconnect').onclick = () => {
 $('btnImportFiles').onclick = () => $('fileInput').click();
 $('btnImportDir').onclick = () => $('dirInput').click();
 $('fileInput').onchange = e => importFiles(e.target.files);
+$('imgInput').onchange = e => { insertImages(e.target.files); e.target.value = ''; };
 $('dirInput').onchange = e => importFiles(e.target.files);
 
 $('btnPersist').onclick = async () => {

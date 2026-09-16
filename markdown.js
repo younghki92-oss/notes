@@ -3,6 +3,10 @@
    미리보기와 인쇄(PDF)에 함께 씁니다.
    ───────────────────────────────────────────── */
 
+// 첨부 이미지 id → 화면에 쓸 주소. 그릴 때마다 app.js 가 채워 줍니다.
+let attUrls = new Map();
+export const setAttachmentUrls = m => { attUrls = m || new Map(); };
+
 export const esc = s => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
@@ -10,7 +14,15 @@ export const esc = s => String(s)
 function inline(s) {
   let t = esc(s);
   t = t.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
-  t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, a, u) => `<img src="${u}" alt="${a}">`);
+  t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, a, u) => {
+    if (u.startsWith('att:')) {
+      const url = attUrls.get(u.slice(4));
+      return url
+        ? `<img src="${url}" alt="${a}" loading="lazy">`
+        : `<span class="img-missing">그림 없음: ${a || u}</span>`;
+    }
+    return `<img src="${u}" alt="${a}" loading="lazy">`;
+  });
   t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, a, u) => `<a href="${u}" rel="noopener" target="_blank">${a}</a>`);
   t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   t = t.replace(/(^|\W)\*([^*\n]+)\*/g, '$1<em>$2</em>');

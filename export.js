@@ -99,13 +99,22 @@ function para(inner, { indent = 0, spaceBefore = 0, spaceAfter = 120, align } = 
 }
 
 /** 마크다운 본문 → document.xml 의 본문 조각 */
-function mdToWordBody(md) {
+function mdToWordBody(md, images = new Map()) {
   const lines = String(md || '').replace(/\r\n?/g, '\n').split('\n');
   const out = [];
   let i = 0;
 
   while (i < lines.length) {
     const line = lines[i];
+
+    const img = line.match(/^\s*!\[([^\]]*)\]\(([^)\s]+)\)\s*$/);
+    if (img) {
+      const key = img[2].startsWith('att:') ? img[2].slice(4) : img[2];
+      const info = images.get(key);
+      if (info) out.push(drawingXml(info.rId, info.cx, info.cy, info.name, info.n));
+      else out.push(para(runs(`[그림: ${img[1] || '첨부'}]`, { i: true, color: '888888' })));
+      i++; continue;
+    }
 
     if (/^```/.test(line)) {
       i++;
@@ -157,7 +166,25 @@ function mdToWordBody(md) {
   return out.join('');
 }
 
-function docxXml(note) {
+const EMU_PER_PX = 9525;
+const MAX_W_EMU = Math.round(((11906 - 1276 * 2) / 20 / 72) * 914400);  // 본문 가로폭
+
+function drawingXml(rId, cx, cy, name, n) {
+  return `<w:p><w:pPr><w:spacing w:before="120" w:after="160"/></w:pPr><w:r><w:drawing>`
+    + `<wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">`
+    + `<wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${n}" name="${X(name)}"/>`
+    + `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">`
+    + `<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">`
+    + `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">`
+    + `<pic:nvPicPr><pic:cNvPr id="${n}" name="${X(name)}"/><pic:cNvPicPr/></pic:nvPicPr>`
+    + `<pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${rId}"/>`
+    + `<a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
+    + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`
+    + `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
+    + `</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+}
+
+function docxXml(note, images) {
   const when = new Date(note.modified).toLocaleString('ko-KR');
   const metaLine = when + (note.tags?.length ? ' · ' + note.tags.map(t => '#' + t).join(' ') : '');
   const head =
@@ -166,17 +193,44 @@ function docxXml(note) {
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:body>${head}${mdToWordBody(stripFirstHeading(note.body, note.title))}
+<w:body>${head}${mdToWordBody(stripFirstHeading(note.body, note.title), images)}
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1418" w:right="1276" w:bottom="1418" w:left="1276" w:header="709" w:footer="709" w:gutter="0"/></w:sectPr>
 </w:body></w:document>`;
 }
 
-export function exportDocx(note) {
+/**
+ * @param note 노트
+ * @param attachments Map(attId → { bytes:Uint8Array, type:string, w:number, h:number, name:string })
+ */
+export function exportDocx(note, attachments = new Map()) {
+  const media = {};
+  const rels = [];
+  const images = new Map();
+  const exts = new Set();
+  let k = 0;
+
+  for (const [id, a] of attachments) {
+    k++;
+    const ext = a.type === 'image/jpeg' ? 'jpeg' : a.type === 'image/gif' ? 'gif' : 'png';
+    exts.add(ext);
+    const file = `media/image${k}.${ext}`;
+    media[`word/${file}`] = a.bytes;
+    const rId = `rIdImg${k}`;
+    rels.push(`<Relationship Id="${rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${file}"/>`);
+    const wPx = a.w || 600, hPx = a.h || 400;
+    let cx = wPx * EMU_PER_PX, cy = hPx * EMU_PER_PX;
+    if (cx > MAX_W_EMU) { cy = Math.round(cy * (MAX_W_EMU / cx)); cx = MAX_W_EMU; }
+    images.set(id, { rId, cx: Math.round(cx), cy: Math.round(cy), name: a.name || `image${k}`, n: 100 + k });
+  }
+
+  const extDefaults = [...exts].map(e =>
+    `<Default Extension="${e}" ContentType="image/${e === 'jpeg' ? 'jpeg' : e}"/>`).join('');
+
   const files = {
     '[Content_Types].xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
+<Default Extension="xml" ContentType="application/xml"/>${extDefaults}
 <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 </Types>`,
     '_rels/.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -184,8 +238,9 @@ export function exportDocx(note) {
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>`,
     'word/_rels/document.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
-    'word/document.xml': docxXml(note),
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>`,
+    'word/document.xml': docxXml(note, images),
+    ...media,
   };
   const blob = zipStore(files,
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -226,7 +281,7 @@ export function zipStore(files, mimeType = 'application/zip') {
 
   for (const [name, content] of Object.entries(files)) {
     const nameBytes = enc.encode(name);
-    const data = enc.encode(content);
+    const data = content instanceof Uint8Array ? content : enc.encode(content);
     const crc = crc32(data);
 
     const lh = new Uint8Array(30 + nameBytes.length);

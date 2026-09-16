@@ -4,9 +4,10 @@
    ───────────────────────────────────────────── */
 
 const DB_NAME = 'notes-app';
-const DB_VER = 1;
+const DB_VER = 2;
 const STORE = 'notes';
 const META = 'meta';
+const FILES = 'files';   // 노트에 딸린 이미지
 
 let _db = null;
 
@@ -24,6 +25,11 @@ function open() {
       }
       if (!db.objectStoreNames.contains(META)) {
         db.createObjectStore(META, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(FILES)) {
+        const f = db.createObjectStore(FILES, { keyPath: 'id' });
+        f.createIndex('noteId', 'noteId');
+        f.createIndex('dirty', 'dirty');
       }
     };
     req.onsuccess = () => { _db = req.result; resolve(_db); };
@@ -72,7 +78,12 @@ export function tagsOf(body) {
 export function excerptOf(body) {
   const lines = (body || '').split('\n');
   const first = lines.findIndex(l => l.trim().length);
-  return lines.slice(first + 1).join(' ').replace(/[#*_`>[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  return lines.slice(first + 1).join(' ')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '🖼 ')
+    .replace(/[#*_`>[\]]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 140);
 }
 
 /* ── CRUD ──────────────────────────────────── */
@@ -126,6 +137,34 @@ export function trashNote(note) {
 export const purge = id => tx(STORE, 'readwrite', s => s.delete(id));
 
 export const dirtyNotes = () => allRows().then(rows => rows.filter(n => n.dirty));
+
+/* ── 이미지 첨부 ───────────────────────────── */
+
+/** 본문에서 att:xxxx 형태로 참조합니다. 실제 그림은 여기 따로 둡니다. */
+export function newAttachment(blob, name, noteId) {
+  return {
+    id: uid(),
+    name: name || 'image',
+    type: blob.type || 'image/png',
+    blob,
+    noteId: noteId || null,
+    created: Date.now(),
+    dirty: 1,
+    driveId: null,
+    deleted: false,
+  };
+}
+
+export const putFile = f => tx(FILES, 'readwrite', s => s.put(f)).then(() => f);
+export const getFile = id => tx(FILES, 'readonly', s => s.get(id));
+export const allFiles = () => tx(FILES, 'readonly', s => s.getAll());
+export const purgeFile = id => tx(FILES, 'readwrite', s => s.delete(id));
+export const dirtyFiles = () => allFiles().then(rows => rows.filter(f => f.dirty && !f.deleted));
+
+/** 본문이 참조하는 첨부 id 목록 */
+export function attachmentIds(body) {
+  return [...new Set([...String(body || '').matchAll(/\(att:([A-Za-z0-9-]+)\)/g)].map(m => m[1]))];
+}
 
 /* ── 메타(토큰·폴더 id 등) ──────────────────── */
 

@@ -46,6 +46,7 @@
         목록
       </button>
       <span id="stamp" class="stamp"></span>
+      <button id="stats" class="stats" title="분량 자세히 보기"></button>
       <div class="bar-spacer"></div>
       <button id="btnPreview" class="text-btn" aria-pressed="false">미리보기</button>
       <div class="menu-wrap">
@@ -53,6 +54,8 @@
           <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="10" cy="4.5" r="1.4" fill="currentColor"/><circle cx="10" cy="10" r="1.4" fill="currentColor"/><circle cx="10" cy="15.5" r="1.4" fill="currentColor"/></svg>
         </button>
         <div id="moreMenu" class="menu" hidden>
+          <button data-act="image">이미지 넣기</button>
+          <hr>
           <button data-act="md">마크다운으로 내보내기</button>
           <button data-act="docx">Word(.docx)로 내보내기</button>
           <button data-act="pdf">PDF로 인쇄</button>
@@ -107,13 +110,14 @@
 
     <section class="sheet-sec">
       <h3>애플 노트 가져오기</h3>
-      <p class="hint">맥 노트 앱에서 마크다운으로 내보낸 <code>.md</code> 파일을 고르세요. 폴더째 선택해도 됩니다. YAML 앞머리의 태그와 본문의 #태그를 모두 읽습니다.</p>
+      <p class="hint">맥 노트 앱에서 마크다운으로 내보낸 결과를 가져옵니다. <strong>그림까지 가져오려면 반드시 폴더째</strong> 고르세요. 애플은 그림을 <code>Attachments</code> 폴더에 따로 빼두기 때문에, 파일만 고르면 그림이 빠집니다.</p>
       <div class="btn-row">
         <button id="btnImportFiles" class="quiet">파일 고르기</button>
         <button id="btnImportDir" class="quiet">폴더 고르기</button>
       </div>
       <input id="fileInput" type="file" accept=".md,.markdown,.txt" multiple hidden>
       <input id="dirInput" type="file" webkitdirectory directory multiple hidden>
+      <input id="imgInput" type="file" accept="image/*" multiple hidden>
       <p id="importMsg" class="hint mono"></p>
     </section>
 

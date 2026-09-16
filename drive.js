@@ -226,6 +226,52 @@ async function pushNote(note, folderId) {
   return note;
 }
 
+async function pushAttachment(att, folderId) {
+  const meta = {
+    name: att.name || 'image',
+    mimeType: att.type || 'application/octet-stream',
+    appProperties: { attId: att.id, noteId: att.noteId || '' },
+  };
+  let url, method;
+  if (att.driveId) {
+    url = `${UPLOAD}/files/${att.driveId}?uploadType=multipart&fields=id`;
+    method = 'PATCH';
+  } else {
+    meta.parents = [folderId];
+    url = `${UPLOAD}/files?uploadType=multipart&fields=id`;
+    method = 'POST';
+  }
+  const b = '=-=-=-att-' + Math.random().toString(36).slice(2);
+  const body = new Blob([
+    `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+    JSON.stringify(meta),
+    `\r\n--${b}\r\nContent-Type: ${meta.mimeType}\r\n\r\n`,
+    att.blob,
+    `\r\n--${b}--\r\n`,
+  ]);
+  const r = await api(url, { method, headers: { 'Content-Type': `multipart/related; boundary=${b}` }, body });
+  const j = await r.json();
+  att.driveId = j.id;
+  att.dirty = 0;
+  await db.putFile(att);
+}
+
+async function pullAttachment(f) {
+  const r = await api(`${API}/files/${f.id}?alt=media`);
+  const blob = await r.blob();
+  await db.putFile({
+    id: f.appProperties.attId,
+    name: f.name,
+    type: blob.type || 'image/png',
+    blob,
+    noteId: f.appProperties.noteId || null,
+    created: Date.now(),
+    dirty: 0,
+    driveId: f.id,
+    deleted: false,
+  });
+}
+
 async function pullFile(f) {
   const r = await api(`${API}/files/${f.id}?alt=media`);
   const text = await r.text();
@@ -277,6 +323,20 @@ export async function sync({ interactive = false } = {}) {
       pageToken = j.nextPageToken || null;
     } while (pageToken);
 
+    // 그림 파일은 따로 다룹니다.
+    const remoteAtts = [];
+    for (const [fid, f] of [...remote]) {
+      if (f.appProperties?.attId) { remoteAtts.push(f); remote.delete(fid); }
+    }
+
+    const localFiles = await db.allFiles();
+    const haveAtt = new Set(localFiles.map(a => a.id));
+    for (const f of remoteAtts) {
+      if (haveAtt.has(f.appProperties.attId)) continue;
+      await pullAttachment(f);
+      tally.pulled++;
+    }
+
     const local = await db.allRows();
     const byDriveId = new Map(local.filter(n => n.driveId).map(n => [n.driveId, n]));
     const byNoteId = new Map(local.map(n => [n.id, n]));
@@ -289,6 +349,12 @@ export async function sync({ interactive = false } = {}) {
           await api(`${API}/files/${n.driveId}`, { method: 'DELETE' });
           remote.delete(n.driveId);
         } catch (e) { if (!/404/.test(e.message)) throw e; }
+      }
+      for (const att of (await db.allFiles()).filter(a => a.noteId === n.id)) {
+        if (att.driveId) {
+          try { await api(`${API}/files/${att.driveId}`, { method: 'DELETE' }); } catch {}
+        }
+        await db.purgeFile(att.id);
       }
       await db.purge(n.id);
       tally.deleted++;
@@ -358,6 +424,12 @@ export async function sync({ interactive = false } = {}) {
       if (n.deleted || !n.dirty) continue;
       if (n.driveId && remote.has(n.driveId)) continue;
       await pushNote(n, folderId);
+      tally.pushed++;
+    }
+
+    // 아직 안 올라간 그림 올리기
+    for (const att of await db.dirtyFiles()) {
+      await pushAttachment(att, folderId);
       tally.pushed++;
     }
 

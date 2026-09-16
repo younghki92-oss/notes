@@ -51,8 +51,10 @@
 
 html, body {
   height: 100%;
+  width: 100%;
   margin: 0;
   overflow: hidden;
+  overscroll-behavior: none;
   background: var(--paper);
   color: var(--ink);
   font-family: var(--sans);
@@ -73,14 +75,20 @@ button { cursor: pointer; }
 
 .app {
   display: grid;
-  grid-template-columns: var(--list-w) 1fr;
+  grid-template-columns: var(--list-w) minmax(0, 1fr);
   height: 100dvh;
+  width: 100%;
+  max-width: 100vw;
+  overflow: hidden;
 }
 
 .pane-list {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   border-right: 1px solid var(--rule);
   background: var(--paper-2);
   padding-top: env(safe-area-inset-top);
@@ -91,6 +99,9 @@ button { cursor: pointer; }
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding-top: env(safe-area-inset-top);
 }
 
@@ -171,6 +182,8 @@ button { cursor: pointer; }
 .note-item {
   display: block;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   text-align: left;
   background: transparent;
   border: 0;
@@ -265,12 +278,26 @@ button { cursor: pointer; }
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
   padding: 8px 12px;
   border-bottom: 1px solid var(--rule);
   min-height: 46px;
 }
 .bar-spacer { flex: 1; }
-.stamp { font-size: 11.5px; color: var(--ink-faint); }
+.stamp { font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; }
+
+.stats {
+  background: transparent;
+  border: 0;
+  padding: 3px 7px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.stats:hover { background: var(--paper-2); color: var(--ink-soft); }
+.stats:empty { display: none; }
 
 .text-btn {
   background: transparent;
@@ -287,6 +314,7 @@ button { cursor: pointer; }
   flex: 1;
   min-height: 0;
   width: 100%;
+  max-width: 100%;
   border: 0;
   resize: none;
   background: var(--paper);
@@ -341,6 +369,21 @@ button { cursor: pointer; }
   background: var(--accent-bg);
   border-radius: 4px;
   padding: 0 4px;
+}
+.preview img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 5px;
+  display: block;
+  margin: 1em 0;
+}
+.preview .img-missing {
+  display: inline-block;
+  padding: 3px 9px;
+  border: 1px dashed var(--rule);
+  border-radius: 5px;
+  font-size: .85em;
+  color: var(--ink-faint);
 }
 .preview table { border-collapse: collapse; margin-bottom: 1em; }
 .preview th, .preview td { border: 1px solid var(--rule); padding: 5px 9px; text-align: left; }
@@ -495,7 +538,7 @@ code { font-family: var(--mono); font-size: .9em; }
 .only-narrow { display: none; }
 
 @media (max-width: 760px) {
-  .app { grid-template-columns: 1fr; }
+  .app { grid-template-columns: minmax(0, 1fr); }
   .pane-list, .pane-editor { grid-area: 1 / 1; }
   .pane-editor { display: none; }
   .app[data-view="editor"] .pane-list { display: none; }
@@ -566,6 +609,10 @@ code { font-family: var(--mono); font-size: .9em; }
 }
 
 /* 폴드 닫은 화면처럼 아주 좁은 기기 */
+@media (max-width: 560px) {
+  .stamp { display: none; }
+}
+
 @media (max-width: 430px) {
   .editor, .preview {
     padding-left: 15px;
