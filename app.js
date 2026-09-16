@@ -11,6 +11,45 @@ import { exportMarkdown, exportDocx, printNote, exportAllZip } from './export.js
 
 const $ = id => document.getElementById(id);
 
+/* ── 문제가 생기면 화면에 보여 줍니다 ─────────
+   (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
+
+const missingIds = [];
+
+function banner(text) {
+  let b = $('banner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'banner';
+    b.className = 'banner';
+    document.body.appendChild(b);
+    b.onclick = () => b.remove();
+  }
+  b.textContent = text;
+}
+
+/** 요소가 없어도 조용히 넘어가는 속성 설정 */
+function setProp(id, prop, value) {
+  const node = $(id);
+  if (node) node[prop] = value;
+  return value;
+}
+
+/** 요소가 없어도 나머지 기능은 살아 있도록 연결합니다. */
+function on(id, event, handler) {
+  const node = $(id);
+  if (!node) { missingIds.push(id); return null; }
+  node.addEventListener(event, handler);
+  return node;
+}
+
+window.addEventListener('error', e => {
+  banner('문제가 생겼습니다: ' + (e.message || '알 수 없는 오류') + ' — 눌러서 닫기');
+});
+window.addEventListener('unhandledrejection', e => {
+  banner('문제가 생겼습니다: ' + (e.reason?.message || e.reason) + ' — 눌러서 닫기');
+});
+
 const el = {
   app: $('app'), list: $('noteList'), search: $('search'), tagBar: $('tagBar'),
   editor: $('editor'), preview: $('preview'), empty: $('empty'), stamp: $('stamp'),
@@ -84,18 +123,18 @@ function setSelectMode(on) {
   selectMode = on;
   if (!on) selected.clear();
   el.app.dataset.select = on ? 'on' : '';
-  $('selBar').hidden = !on;
-  $('btnSelect').setAttribute('aria-pressed', String(on));
+  setProp('selBar', 'hidden', !on);
+  $('btnSelect')?.setAttribute('aria-pressed', String(on));
   drawSelCount();
   drawList();
 }
 
 function drawSelCount() {
-  $('selCount').textContent = `${selected.size}개 선택`;
-  $('selDelete').disabled = selected.size === 0;
+  setProp('selCount', 'textContent', `${selected.size}개 선택`);
+  setProp('selDelete', 'disabled', selected.size === 0);
   const rows = visible();
-  $('selAll').textContent =
-    rows.length && rows.every(n => selected.has(n.id)) ? '선택 해제' : '전체 선택';
+  setProp('selAll', 'textContent',
+    rows.length && rows.every(n => selected.has(n.id)) ? '선택 해제' : '전체 선택');
 }
 
 /** 노트와 딸린 그림을 지웁니다. 드라이브를 쓰면 무덤으로 남겨 나중에 정리합니다. */
@@ -218,7 +257,7 @@ async function reload() {
 function showEditor(on) {
   el.empty.hidden = on;
   el.editor.hidden = !on;
-  if (!on) { el.preview.hidden = true; $('btnPreview').setAttribute('aria-pressed', 'false'); }
+  if (!on) { el.preview.hidden = true; $('btnPreview')?.setAttribute('aria-pressed', 'false'); }
   if (window.matchMedia('(max-width: 760px)').matches) {
     el.app.dataset.view = on ? 'editor' : 'list';
   }
@@ -315,7 +354,7 @@ async function runSync(interactive) {
     else if (interactive) toast(`올림 ${r.pushed} · 내림 ${r.pulled}`);
   } catch (e) {
     if (interactive) toast(e.message, 4000);
-    $('syncMsg').textContent = e.message;
+    setProp('syncMsg', 'textContent', e.message);
   } finally {
     await updateSyncBadge();
   }
@@ -328,7 +367,7 @@ async function importFiles(fileList) {
   const mdFiles = all.filter(f => /\.(md|markdown|txt)$/i.test(f.name));
   const imgFiles = all.filter(f => /\.(png|jpe?g|gif|webp|heic|tiff?)$/i.test(f.name));
 
-  if (!mdFiles.length) { $('importMsg').textContent = '마크다운 파일을 찾지 못했습니다.'; return; }
+  if (!mdFiles.length) { setProp('importMsg', 'textContent', '마크다운 파일을 찾지 못했습니다.'); return; }
 
   // 그림을 경로와 파일이름 두 가지로 찾을 수 있게 정리해 둡니다.
   const byPath = new Map();
@@ -441,53 +480,53 @@ async function attachmentBytes(body) {
 /* ── 설정 시트 ────────────────────────────── */
 
 async function openSheet() {
-  $('clientId').value = drive.getClientId();
-  $('folderName').value = drive.getFolderName();
-  $('syncMsg').textContent = drive.state.lastError || (drive.wasConnected() ? '연결되어 있습니다.' : '');
+  setProp('clientId', 'value', drive.getClientId());
+  setProp('folderName', 'value', drive.getFolderName());
+  setProp('syncMsg', 'textContent', drive.state.lastError || (drive.wasConnected() ? '연결되어 있습니다.' : ''));
   el.sheet.hidden = false;
   const { persisted, usage, quota } = await db.storageInfo();
   const mb = b => (b / 1048576).toFixed(1) + 'MB';
-  $('storageMsg').textContent =
-    `${persisted ? '보호됨' : '보호 안 됨'} · 사용 ${mb(usage)} / 가용 ${mb(quota)} · 노트 ${notes.length}개`;
+  setProp('storageMsg', 'textContent',
+    `${persisted ? '보호됨' : '보호 안 됨'} · 사용 ${mb(usage)} / 가용 ${mb(quota)} · 노트 ${notes.length}개`);
 }
 
 /* ── 이벤트 ───────────────────────────────── */
 
-el.stats.onclick = () => { statsFull = !statsFull; drawStats(); };
+on('stats', 'click', () => { statsFull = !statsFull; drawStats(); });
 
 // 그림 붙여넣기
-el.editor.addEventListener('paste', e => {
+on('editor', 'paste', e => {
   const imgs = [...(e.clipboardData?.files || [])].filter(f => /^image\//.test(f.type));
   if (!imgs.length) return;
   e.preventDefault();
   insertImages(imgs);
 });
 
-el.editor.addEventListener('input', queueSave);
-el.editor.addEventListener('blur', flushSave);
+on('editor', 'input', queueSave);
+on('editor', 'blur', flushSave);
 
-el.search.addEventListener('input', e => {
+on('search', 'input', e => {
   query = e.target.value;
   drawList();
   if (selectMode) drawSelCount();
 });
 
-$('btnNew').onclick = createNote;
-$('btnNewEmpty').onclick = createNote;
-$('fab').onclick = createNote;
+on('btnNew', 'click', createNote);
+on('btnNewEmpty', 'click', createNote);
+on('fab', 'click', createNote);
 
-$('btnSelect').onclick = () => setSelectMode(!selectMode);
-$('selCancel').onclick = () => setSelectMode(false);
+on('btnSelect', 'click', () => setSelectMode(!selectMode));
+on('selCancel', 'click', () => setSelectMode(false));
 
-$('selAll').onclick = () => {
+on('selAll', 'click', () => {
   const rows = visible();
   if (rows.length && rows.every(n => selected.has(n.id))) selected.clear();
   else rows.forEach(n => selected.add(n.id));
   drawSelCount();
   drawList();
-};
+});
 
-$('selDelete').onclick = async () => {
+on('selDelete', 'click', async () => {
   const ids = [...selected];
   if (!ids.length) return;
   if (!confirm(`노트 ${ids.length}개를 삭제할까요? 딸린 그림도 함께 지워집니다.`)) return;
@@ -495,36 +534,36 @@ $('selDelete').onclick = async () => {
   setSelectMode(false);
   await removeNotes(ids);
   toast(`${n}개를 삭제했습니다`);
-};
-$('btnBack').onclick = () => { flushSave(); el.app.dataset.view = 'list'; };
+});
+on('btnBack', 'click', () => { flushSave(); el.app.dataset.view = 'list'; });
 
-$('btnPreview').onclick = async e => {
+on('btnPreview', 'click', async e => {
   await flushSave();
   const on = el.preview.hidden;
   el.preview.hidden = !on;
   el.editor.hidden = on;
   e.currentTarget.setAttribute('aria-pressed', String(on));
   if (on && current) el.preview.innerHTML = await renderBody(current.body);
-};
+});
 
-$('btnMore').onclick = e => {
+on('btnMore', 'click', e => {
   const open = el.moreMenu.hidden;
   el.moreMenu.hidden = !open;
   e.currentTarget.setAttribute('aria-expanded', String(open));
-};
+});
 document.addEventListener('click', e => {
   if (!e.target.closest('.menu-wrap')) {
     el.moreMenu.hidden = true;
-    $('btnMore').setAttribute('aria-expanded', 'false');
+    $('btnMore')?.setAttribute('aria-expanded', 'false');
   }
 });
-el.moreMenu.addEventListener('click', async e => {
+on('moreMenu', 'click', async e => {
   const act = e.target.dataset.act;
   if (!act) return;
   el.moreMenu.hidden = true;
   await flushSave();
   if (!current) return toast('노트를 먼저 고르세요');
-  if (act === 'image') { $('imgInput').click(); return; }
+  if (act === 'image') { $('imgInput')?.click(); return; }
   if (act === 'md') exportMarkdown(current);
   if (act === 'docx') {
     toast('Word 파일을 만드는 중…');
@@ -535,51 +574,51 @@ el.moreMenu.addEventListener('click', async e => {
   if (act === 'delete') deleteCurrent();
 });
 
-$('btnSync').onclick = () => runSync(true);
-$('btnSettings').onclick = openSheet;
-$('btnCloseSheet').onclick = () => { el.sheet.hidden = true; };
-el.sheet.addEventListener('click', e => { if (e.target === el.sheet) el.sheet.hidden = true; });
+on('btnSync', 'click', () => runSync(true));
+on('btnSettings', 'click', openSheet);
+on('btnCloseSheet', 'click', () => { el.sheet.hidden = true; });
+on('sheet', 'click', e => { if (e.target === el.sheet) el.sheet.hidden = true; });
 
-$('clientId').addEventListener('change', e => drive.setClientId(e.target.value));
-$('folderName').addEventListener('change', e => drive.setFolderName(e.target.value));
+on('clientId', 'change', e => drive.setClientId(e.target.value));
+on('folderName', 'change', e => drive.setFolderName(e.target.value));
 
-$('btnConnect').onclick = async () => {
-  drive.setClientId($('clientId').value);
-  drive.setFolderName($('folderName').value);
-  $('syncMsg').textContent = '연결 중…';
+on('btnConnect', 'click', async () => {
+  drive.setClientId($('clientId')?.value);
+  drive.setFolderName($('folderName')?.value);
+  setProp('syncMsg', 'textContent', '연결 중…');
   try {
     await drive.auth(true);
-    $('syncMsg').textContent = '연결됐습니다. 첫 동기화를 시작합니다.';
+    setProp('syncMsg', 'textContent', '연결됐습니다. 첫 동기화를 시작합니다.');
     await runSync(true);
-    $('syncMsg').textContent = drive.state.lastError || '동기화 완료.';
+    setProp('syncMsg', 'textContent', drive.state.lastError || '동기화 완료.');
   } catch (e) {
-    $('syncMsg').textContent = e.message;
+    setProp('syncMsg', 'textContent', e.message);
   }
-};
+});
 
-$('btnDisconnect').onclick = () => {
+on('btnDisconnect', 'click', () => {
   drive.disconnect();
-  $('syncMsg').textContent = '연결을 끊었습니다. 노트는 이 기기에 그대로 있습니다.';
+  setProp('syncMsg', 'textContent', '연결을 끊었습니다. 노트는 이 기기에 그대로 있습니다.');
   updateSyncBadge();
-};
+});
 
-$('btnImportFiles').onclick = () => $('fileInput').click();
-$('btnImportDir').onclick = () => $('dirInput').click();
-$('fileInput').onchange = e => importFiles(e.target.files);
-$('imgInput').onchange = e => { insertImages(e.target.files); e.target.value = ''; };
-$('dirInput').onchange = e => importFiles(e.target.files);
+on('btnImportFiles', 'click', () => $('fileInput')?.click());
+on('btnImportDir', 'click', () => $('dirInput')?.click());
+on('fileInput', 'change', e => importFiles(e.target.files));
+on('imgInput', 'change', e => { insertImages(e.target.files); e.target.value = ''; });
+on('dirInput', 'change', e => importFiles(e.target.files));
 
-$('btnPersist').onclick = async () => {
+on('btnPersist', 'click', async () => {
   const ok = await db.requestPersist();
   toast(ok ? '이제 브라우저가 이 데이터를 함부로 지우지 않습니다' : '브라우저가 거절했습니다. 홈 화면에 설치하면 승인될 확률이 높습니다');
   openSheet();
-};
+});
 
-$('btnBackup').onclick = async () => {
+on('btnBackup', 'click', async () => {
   const all = await db.allNotes();
   if (!all.length) return toast('내보낼 노트가 없습니다');
   exportAllZip(all);
-};
+});
 
 document.addEventListener('keydown', e => {
   const meta = e.metaKey || e.ctrlKey;
@@ -589,12 +628,12 @@ document.addEventListener('keydown', e => {
   if (selectMode && (e.key === 'Delete' || e.key === 'Backspace')
       && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
     e.preventDefault();
-    $('selDelete').click();
+    $('selDelete')?.click();
   }
   if (meta && e.key.toLowerCase() === 'a' && selectMode
       && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
     e.preventDefault();
-    $('selAll').click();
+    $('selAll')?.click();
   }
   if (e.key === 'Escape') {
     if (!el.sheet.hidden) el.sheet.hidden = true;
@@ -629,6 +668,10 @@ setInterval(() => { if (document.visibilityState === 'visible') scheduleSync(0);
 /* ── 시작 ─────────────────────────────────── */
 
 (async function start() {
+  if (missingIds.length) {
+    banner('화면 구성요소를 찾지 못했습니다 (' + missingIds.slice(0, 4).join(', ')
+      + '). 파일 일부만 올라간 상태로 보입니다. 모든 파일을 다시 올려 주세요. — 눌러서 닫기');
+  }
   await db.requestPersist();
   await reload();
 
