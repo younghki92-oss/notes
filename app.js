@@ -362,6 +362,19 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// 폴드를 접고 펼 때 한 화면/두 화면 배치를 다시 맞춥니다.
+const narrowQuery = window.matchMedia('(max-width: 760px)');
+function fitLayout() {
+  if (narrowQuery.matches) {
+    if (!el.app.dataset.view) el.app.dataset.view = current ? 'editor' : 'list';
+  } else {
+    delete el.app.dataset.view;
+    if (!current && notes.length) select(notes[0].id);
+  }
+}
+narrowQuery.addEventListener('change', fitLayout);
+window.addEventListener('resize', fitLayout);
+
 window.addEventListener('online', () => { updateSyncBadge(); scheduleSync(800); });
 window.addEventListener('offline', updateSyncBadge);
 document.addEventListener('visibilitychange', () => {

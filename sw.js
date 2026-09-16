@@ -3,7 +3,7 @@
    앱 파일을 고칠 때마다 VERSION 을 올리세요.
    ───────────────────────────────────────────── */
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `notes-shell-${VERSION}`;
 
 const SHELL = [
@@ -16,9 +16,9 @@ const SHELL = [
   'markdown.js',
   'export.js',
   'manifest.webmanifest',
-  'icons/icon-192.png',
-  'icons/icon-512.png',
-  'icons/icon-maskable-512.png',
+  'icon-192.png',
+  'icon-512.png',
+  'icon-maskable-512.png',
 ];
 
 self.addEventListener('install', e => {

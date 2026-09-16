@@ -510,6 +510,53 @@ code { font-family: var(--mono); font-size: .9em; }
   }
 }
 
+/* ── 손가락으로 쓰는 기기 (폴드·갤럭시) ────────── */
+
+@media (pointer: coarse) {
+  .icon-btn { width: 42px; height: 42px; }
+  .note-item { padding: 14px; }
+  .tag-chip { padding: 7px 13px; font-size: 13px; }
+  .foot-btn { padding: 11px 6px; font-size: 13px; }
+  .text-btn { padding: 9px 12px; font-size: 13.5px; }
+  .menu button { padding: 12px 12px; font-size: 14.5px; }
+  /* 16px 미만이면 브라우저가 입력할 때 화면을 확대합니다 */
+  #search, .field input { font-size: 16px; padding: 10px 12px; }
+  .editor-bar { min-height: 54px; }
+}
+
+/* 폴드 펼친 화면처럼 어중간한 너비: 목록을 좁혀 본문을 넓힙니다 */
+@media (min-width: 761px) and (max-width: 1080px) {
+  :root { --list-w: 264px; }
+  .editor, .preview { padding-left: 22px; padding-right: 22px; }
+}
+
+/* 폴드 닫은 화면처럼 아주 좁은 기기 */
+@media (max-width: 430px) {
+  .editor, .preview {
+    padding-left: 15px;
+    padding-right: 15px;
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  .editor { padding-top: 18px; }
+  .preview { padding-top: 18px; }
+  .list-head { padding: 9px 10px 5px; }
+  .note-item { padding: 13px 12px; }
+  .stamp { font-size: 11px; }
+  .sheet-panel { padding-left: 16px; padding-right: 16px; }
+}
+
+/* 접힌 화면처럼 세로로 매우 긴 비율 */
+@media (max-width: 430px) and (min-aspect-ratio: 1/2.4) {
+  .tag-bar { padding-top: 6px; }
+}
+
+/* 가로로 눕힌 낮은 화면: 편집기 여백을 줄여 줄 수를 확보 */
+@media (max-height: 480px) and (orientation: landscape) {
+  .editor, .preview { padding-top: 14px; padding-bottom: 24vh; }
+  .editor-bar { min-height: 42px; padding-top: 5px; padding-bottom: 5px; }
+}
+
 /* ── 인쇄 → PDF ─────────────────────────────── */
 
 .print-area { display: none; }
