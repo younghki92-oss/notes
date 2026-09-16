@@ -3,7 +3,7 @@
    앱 파일을 고칠 때마다 VERSION 을 올리세요.
    ───────────────────────────────────────────── */
 
-const VERSION = 'v9';
+const VERSION = 'v10';
 const CACHE = `notes-shell-${VERSION}`;
 
 const SHELL = [

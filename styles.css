@@ -4,7 +4,7 @@
    ───────────────────────────────────────────── */
 
 :root {
-  --build: 'v9';
+  --build: 'v10';
   --paper:      #FCFCFA;
   --paper-2:    #F4F3EF;
   --ink:        #1C1D1A;
@@ -635,7 +635,7 @@ code { font-family: var(--mono); font-size: .9em; }
 
 /* ── 좁은 화면: 한 화면씩 ─────────────────────── */
 
-@media (max-width: 760px) {
+@media (max-width: 640px) {
   /* 좁은 화면에서는 편집 중에도 새 노트를 바로 시작할 수 있게 */
   .app[data-pane="editor"] .fab { display: grid; }
   .editor, .preview { padding-left: 18px; padding-right: 18px; }
@@ -702,8 +702,21 @@ code { font-family: var(--mono); font-size: .9em; }
 }
 
 /* 폴드 펼친 화면처럼 어중간한 너비: 목록을 좁혀 본문을 넓힙니다 */
-@media (min-width: 761px) and (max-width: 1080px) {
-  :root { --list-w: 264px; }
+/* 폴드 펼친 화면(약 760px)에서도 목록과 본문이 함께 보이도록 목록을 좁힙니다 */
+@media (min-width: 641px) and (max-width: 860px) {
+  :root { --list-w: 232px; }
+  .editor, .preview { padding-left: 20px; padding-right: 20px; }
+  .note-item { padding: 11px 11px; }
+  .note-item h4 { font-size: 13.5px; }
+  .note-item p { font-size: 12px; }
+  #search { padding: 8px 12px; font-size: 14px; }
+  .head-btn { font-size: 11.5px; padding: 7px 4px; }
+  .new-btn { width: 38px; height: 38px; }
+  .icon-btn { width: 34px; height: 34px; }
+}
+
+@media (min-width: 861px) and (max-width: 1160px) {
+  :root { --list-w: 268px; }
   .editor, .preview { padding-left: 22px; padding-right: 22px; }
 }
 
