@@ -4,6 +4,7 @@
    ───────────────────────────────────────────── */
 
 :root {
+  --build: 'v8';
   --paper:      #FCFCFA;
   --paper-2:    #F4F3EF;
   --ink:        #1C1D1A;
@@ -105,43 +106,38 @@ button { cursor: pointer; }
   padding-top: env(safe-area-inset-top);
 }
 
-/* ── 목록 머리 ───────────────────────────────── */
+/* ── 목록 머리: 상태와 설정 ───────────────────── */
 
 .list-head {
-  padding: 10px 12px 6px;
+  padding: 4px 8px 5px;
   border-bottom: 1px solid var(--rule);
+  min-width: 0;
 }
 
-.search-row {
+.head-row {
   display: flex;
-  gap: 6px;
-  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
-#search {
+.head-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   flex: 1;
   min-width: 0;
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 8px 10px;
-  font-size: 14px;
-  -webkit-appearance: none;
-}
-#search::placeholder { color: var(--ink-faint); }
-
-.icon-btn {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  flex: none;
   background: transparent;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: var(--radius);
+  padding: 8px 6px;
+  font-size: 12px;
   color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.icon-btn:hover { background: var(--paper); color: var(--ink); }
+.head-btn:hover { background: var(--paper); color: var(--ink); }
 
 .tag-bar {
   display: flex;
@@ -149,7 +145,8 @@ button { cursor: pointer; }
   gap: 5px;
   overflow-x: auto;
   scrollbar-width: none;
-  padding: 8px 0 2px;
+  padding: 4px 0 2px;
+  min-width: 0;
 }
 .tag-bar::-webkit-scrollbar { display: none; }
 .tag-bar:empty { display: none; }
@@ -169,6 +166,20 @@ button { cursor: pointer; }
   border-color: transparent;
   color: var(--accent);
 }
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--ink-soft);
+}
+.icon-btn:hover { background: var(--paper); color: var(--ink); }
+.icon-btn[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent); }
 
 /* ── 선택 모드 막대 ─────────────────────────── */
 
@@ -290,28 +301,42 @@ button { cursor: pointer; }
   line-height: 1.6;
 }
 
-/* ── 목록 발치 ───────────────────────────────── */
+/* ── 목록 발치: 검색과 새 노트 (엄지에 닿는 자리) ── */
 
 .list-foot {
   display: flex;
-  gap: 4px;
-  border-top: 1px solid var(--rule);
-  padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
-}
-.foot-btn {
-  flex: 1;
-  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius);
-  padding: 7px 6px;
-  font-size: 12px;
-  color: var(--ink-soft);
+  gap: 7px;
+  min-width: 0;
+  border-top: 1px solid var(--rule);
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  background: var(--paper-2);
 }
-.foot-btn:hover { background: var(--paper); color: var(--ink); }
+
+#search {
+  flex: 1;
+  min-width: 0;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-size: 15px;
+  -webkit-appearance: none;
+}
+#search::placeholder { color: var(--ink-faint); }
+
+.new-btn {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--paper);
+}
+.new-btn:active { transform: scale(.93); }
 
 .dot {
   width: 7px; height: 7px;
@@ -613,9 +638,8 @@ code { font-family: var(--mono); font-size: .9em; }
   .app[data-view="editor"] .pane-list { display: none; }
   .app[data-view="editor"] .pane-editor { display: flex; }
   .only-narrow { display: flex; }
-  .fab { display: grid; }
-  /* 목록 맨 아래 항목이 버튼에 가리지 않도록 */
-  .note-list { padding-bottom: 76px; }
+  /* 편집 중에도 새 노트를 바로 시작할 수 있게 */
+  .app[data-view="editor"] .fab { display: grid; }
   .editor, .preview { padding-left: 18px; padding-right: 18px; }
   .sheet { padding: 0; align-items: end; }
   .sheet-panel {
@@ -661,13 +685,15 @@ code { font-family: var(--mono); font-size: .9em; }
 
 @media (pointer: coarse) {
   .icon-btn { width: 42px; height: 42px; }
+  .new-btn { width: 46px; height: 46px; }
+  .head-btn { padding: 10px 6px; font-size: 12.5px; }
   .note-item { padding: 14px; }
   .tag-chip { padding: 7px 13px; font-size: 13px; }
-  .foot-btn { padding: 11px 6px; font-size: 13px; }
   .text-btn { padding: 9px 12px; font-size: 13.5px; }
   .menu button { padding: 12px 12px; font-size: 14.5px; }
   /* 16px 미만이면 브라우저가 입력할 때 화면을 확대합니다 */
-  #search, .field input { font-size: 16px; padding: 10px 12px; }
+  #search { font-size: 16px; padding: 11px 15px; }
+  .field input { font-size: 16px; padding: 10px 12px; }
   .editor-bar { min-height: 54px; }
 }
 
@@ -691,7 +717,8 @@ code { font-family: var(--mono); font-size: .9em; }
   }
   .editor { padding-top: 18px; }
   .preview { padding-top: 18px; }
-  .list-head { padding: 9px 10px 5px; }
+  .list-head { padding: 3px 6px 4px; }
+  .list-foot { padding-left: 8px; padding-right: 8px; }
   .note-item { padding: 13px 12px; }
   .stamp { font-size: 11px; }
   .sheet-panel { padding-left: 16px; padding-right: 16px; }

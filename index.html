@@ -18,20 +18,18 @@
   <!-- ── 왼쪽: 목록 ─────────────────────────────── -->
   <aside class="pane-list" id="paneList">
     <header class="list-head">
-      <div class="search-row">
-        <input id="search" type="search" placeholder="검색" autocomplete="off" spellcheck="false">
-        <button id="btnSelect" class="icon-btn" title="노트 선택" aria-label="노트 선택">
-          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5l3.4 3.4L16 5.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      <div class="head-row">
+        <button id="btnSync" class="head-btn" title="지금 동기화">
+          <span id="syncDot" class="dot" data-state="off"></span>
+          <span id="syncLabel">연결 안 됨</span>
         </button>
-        <button id="btnNew" class="icon-btn" title="새 노트 (Ctrl/Cmd+N)" aria-label="새 노트">
-          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>
-        </button>
+        <button id="btnSettings" class="head-btn" aria-label="설정">설정</button>
       </div>
       <div id="tagBar" class="tag-bar"></div>
 
       <div id="selBar" class="sel-bar" hidden>
         <button id="selAll" class="quiet sm">전체 선택</button>
-        <span id="selCount" class="sel-count">0개</span>
+        <span id="selCount" class="sel-count">0개 선택</span>
         <button id="selDelete" class="danger-btn sm">삭제</button>
         <button id="selCancel" class="quiet sm">취소</button>
       </div>
@@ -40,12 +38,15 @@
     <div id="noteList" class="note-list" role="list"></div>
 
     <footer class="list-foot">
-      <button id="btnSync" class="foot-btn" title="지금 동기화">
-        <span id="syncDot" class="dot" data-state="off"></span>
-        <span id="syncLabel">연결 안 됨</span>
+      <input id="search" type="search" placeholder="검색" autocomplete="off" spellcheck="false">
+      <button id="btnSelect" class="icon-btn" title="노트 선택" aria-label="노트 선택">
+        <svg viewBox="0 0 20 20" width="19" height="19" aria-hidden="true"><path d="M4 10.5l3.4 3.4L16 5.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
       </button>
-      <button id="btnSettings" class="foot-btn" aria-label="설정">설정</button>
+      <button id="btnNew" class="new-btn" title="새 노트 (Ctrl/Cmd+N)" aria-label="새 노트">
+        <svg viewBox="0 0 22 22" width="21" height="21" aria-hidden="true"><path d="M11 5v12M5 11h12" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" fill="none"/></svg>
+      </button>
     </footer>
+
   </aside>
 
   <!-- ── 오른쪽: 편집기 ───────────────────────────── -->

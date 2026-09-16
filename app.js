@@ -14,7 +14,20 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
+const BUILD = 'v8';
 const missingIds = [];
+
+/** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
+function checkBuild() {
+  const css = getComputedStyle(document.documentElement)
+    .getPropertyValue('--build').replace(/['"\s]/g, '');
+  if (css !== BUILD) {
+    banner(`styles.css 가 최신이 아닙니다 (화면 ${css || '없음'} / 코드 ${BUILD}). `
+      + '모든 파일을 다시 올리고 캐시를 비워 주세요. — 눌러서 닫기');
+    return false;
+  }
+  return true;
+}
 
 function banner(text) {
   let b = $('banner');
@@ -486,8 +499,11 @@ async function openSheet() {
   el.sheet.hidden = false;
   const { persisted, usage, quota } = await db.storageInfo();
   const mb = b => (b / 1048576).toFixed(1) + 'MB';
+  const cssBuild = getComputedStyle(document.documentElement)
+    .getPropertyValue('--build').replace(/['"\s]/g, '') || '없음';
   setProp('storageMsg', 'textContent',
-    `${persisted ? '보호됨' : '보호 안 됨'} · 사용 ${mb(usage)} / 가용 ${mb(quota)} · 노트 ${notes.length}개`);
+    `버전 ${BUILD} (화면 ${cssBuild}) · ${persisted ? '보호됨' : '보호 안 됨'}`
+    + ` · 사용 ${mb(usage)} / 가용 ${mb(quota)} · 노트 ${notes.length}개`);
 }
 
 /* ── 이벤트 ───────────────────────────────── */
@@ -668,6 +684,7 @@ setInterval(() => { if (document.visibilityState === 'visible') scheduleSync(0);
 /* ── 시작 ─────────────────────────────────── */
 
 (async function start() {
+  checkBuild();
   if (missingIds.length) {
     banner('화면 구성요소를 찾지 못했습니다 (' + missingIds.slice(0, 4).join(', ')
       + '). 파일 일부만 올라간 상태로 보입니다. 모든 파일을 다시 올려 주세요. — 눌러서 닫기');
