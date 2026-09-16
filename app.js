@@ -14,7 +14,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v10';
+const BUILD = 'v11';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -503,6 +503,33 @@ async function insertImages(fileList) {
   toast('그림을 넣었습니다');
 }
 
+/**
+ * 연달아 똑같이 반복된 줄을 한 번만 남깁니다.
+ * (붙여서 반복된 것만 지웁니다. 떨어져 있는 같은 문장은 건드리지 않습니다.)
+ */
+function dedupeLines(body) {
+  const lines = String(body || '').split('\n');
+  const out = [];
+  let removed = 0;
+  for (const line of lines) {
+    const prev = out[out.length - 1];
+    if (line.trim() && prev !== undefined && prev.trim() === line.trim()) { removed++; continue; }
+    out.push(line);
+  }
+  return { text: out.join('\n'), removed };
+}
+
+async function dedupeCurrent() {
+  if (!current) return;
+  const { text, removed } = dedupeLines(current.body);
+  if (!removed) return toast('반복된 줄이 없습니다');
+  if (!confirm(`연달아 반복된 줄 ${removed}개를 지웁니다. 계속할까요?`)) return;
+  el.editor.value = text;
+  await flushSave();
+  if (!el.preview.hidden) el.preview.innerHTML = await renderBody(current.body);
+  toast(`${removed}줄을 정리했습니다`);
+}
+
 /** Word 내보내기에 넣을 그림들을 준비합니다. */
 async function attachmentBytes(body) {
   const out = new Map();
@@ -614,6 +641,7 @@ on('moreMenu', 'click', async e => {
   await flushSave();
   if (!current) return toast('노트를 먼저 고르세요');
   if (act === 'image') { $('imgInput')?.click(); return; }
+  if (act === 'dedupe') { dedupeCurrent(); return; }
   if (act === 'md') exportMarkdown(current);
   if (act === 'docx') {
     toast('Word 파일을 만드는 중…');
