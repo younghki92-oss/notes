@@ -279,6 +279,24 @@ async function pullFile(f) {
   return { meta, body };
 }
 
+/** 드라이브 폴더의 노트·그림을 모두 지웁니다. (되돌릴 수 없습니다) */
+export async function wipeRemote() {
+  await auth(true);
+  const folderId = await ensureFolder();
+  let removed = 0, pageToken = null;
+  do {
+    const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
+    const url = `${API}/files?q=${q}&fields=nextPageToken,files(id)&pageSize=200`
+      + (pageToken ? '&pageToken=' + pageToken : '');
+    const j = await (await api(url)).json();
+    for (const f of j.files || []) {
+      try { await api(`${API}/files/${f.id}`, { method: 'DELETE' }); removed++; } catch {}
+    }
+    pageToken = j.nextPageToken || null;
+  } while (pageToken);
+  return removed;
+}
+
 /* ── 동기화 본체 ───────────────────────────── */
 
 /**
@@ -313,15 +331,19 @@ export async function sync({ interactive = false } = {}) {
 
     // 1) 원격 목록
     const remote = new Map();   // noteId 또는 file.id → file
+    const remoteIds = new Set(); // 지우기 판단용 (그림 포함 전체)
+    let listingComplete = false;
+    let remoteSeen = 0;
     let pageToken = null;
     do {
       const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
       const url = `${API}/files?q=${q}&fields=nextPageToken,files(id,name,modifiedTime,appProperties)`
         + `&pageSize=200${pageToken ? '&pageToken=' + pageToken : ''}`;
       const j = await (await api(url)).json();
-      for (const f of j.files || []) remote.set(f.id, f);
+      for (const f of j.files || []) { remote.set(f.id, f); remoteIds.add(f.id); remoteSeen++; }
       pageToken = j.nextPageToken || null;
     } while (pageToken);
+    listingComplete = true;
 
     // 그림 파일은 따로 다룹니다.
     const remoteAtts = [];
@@ -416,6 +438,22 @@ export async function sync({ interactive = false } = {}) {
       } else if (n.dirty) {
         await pushNote(n, folderId);
         tally.pushed++;
+      }
+    }
+
+    // 3-2) 다른 기기에서 지운 노트를 이 기기에서도 지웁니다.
+    //      한 번 올라간 적이 있고(driveTime 있음), 여기서 고친 것도 아닌데
+    //      드라이브 목록에 없다면 = 다른 기기에서 지운 것입니다.
+    if (listingComplete && remoteSeen > 0) {
+      for (const n of await db.allRows()) {
+        if (n.deleted || n.dirty) continue;
+        if (!n.driveId || !n.driveTime) continue;
+        if (remoteIds.has(n.driveId)) continue;
+        for (const att of (await db.allFiles()).filter(a => a.noteId === n.id)) {
+          await db.purgeFile(att.id);
+        }
+        await db.purge(n.id);
+        tally.deleted++;
       }
     }
 

@@ -14,7 +14,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v11';
+const BUILD = 'v12';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -690,6 +690,32 @@ on('btnPersist', 'click', async () => {
   const ok = await db.requestPersist();
   toast(ok ? '이제 브라우저가 이 데이터를 함부로 지우지 않습니다' : '브라우저가 거절했습니다. 홈 화면에 설치하면 승인될 확률이 높습니다');
   openSheet();
+});
+
+on('btnWipe', 'click', async () => {
+  if (!confirm('모든 노트를 지웁니다. 되돌릴 수 없습니다. 계속할까요?')) return;
+  if (!confirm('정말 지울까요? 백업을 받아 두셨는지 다시 한 번 확인해 주세요.')) return;
+
+  const msg = $('wipeMsg');
+  setProp('wipeMsg', 'textContent', '지우는 중…');
+
+  try {
+    if (drive.wasConnected()) {
+      const n = await drive.wipeRemote();
+      setProp('wipeMsg', 'textContent', `드라이브에서 ${n}개를 지웠습니다. 이 기기를 정리하는 중…`);
+    }
+    for (const row of await db.allRows()) await db.purge(row.id);
+    for (const f of await db.allFiles()) await db.purgeFile(f.id);
+    attUrlCache.clear();
+    current = null;
+    el.editor.value = '';
+    showEditor(false);
+    await reload();
+    setProp('wipeMsg', 'textContent', '모두 지웠습니다. 이제 다시 가져오시면 됩니다.');
+    toast('모든 노트를 지웠습니다');
+  } catch (e) {
+    setProp('wipeMsg', 'textContent', '문제가 생겼습니다: ' + e.message);
+  }
 });
 
 on('btnBackup', 'click', async () => {
