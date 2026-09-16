@@ -14,7 +14,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v12';
+const BUILD = 'v13';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -427,7 +427,7 @@ async function importFiles(fileList) {
   }
 
   const msg = $('importMsg');
-  let done = 0, attached = 0, missing = 0;
+  let done = 0, attached = 0, missing = 0, cleanedLines = 0;
 
   for (const f of mdFiles) {
     msg.textContent = `가져오는 중… ${done + 1} / ${mdFiles.length}`;
@@ -438,6 +438,12 @@ async function importFiles(fileList) {
     const firstLine = body.split('\n').find(l => l.trim()) || '';
     const hasHeading = /^\s*#{1,6}\s/.test(firstLine);
     let full = hasHeading ? body : `# ${meta.title || titleFromName}\n\n${body}`;
+
+    if ($('cleanOnImport')?.checked !== false) {
+      const c = cleanAppleExport(full);
+      full = c.text;
+      cleanedLines += c.removed;
+    }
 
     const noteId = db.uid();
     const dir = (f.webkitRelativePath || '').split('/').slice(0, -1).join('/');
@@ -475,8 +481,10 @@ async function importFiles(fileList) {
     done++;
   }
 
-  msg.textContent = `노트 ${done}개, 그림 ${attached}장을 가져왔습니다.`
-    + (missing ? ` 그림 ${missing}장은 파일을 찾지 못했습니다 — 폴더째 고르셨는지 확인해 주세요.` : '');
+  setProp('importMsg', 'textContent',
+    `노트 ${done}개, 그림 ${attached}장을 가져왔습니다.`
+    + (cleanedLines ? ` 애플 내보내기 오류로 중복된 ${cleanedLines.toLocaleString('ko-KR')}줄을 정리했습니다.` : '')
+    + (missing ? ` 그림 ${missing}장은 파일을 찾지 못했습니다 — 폴더째 고르셨는지 확인해 주세요.` : ''));
   await reload();
   scheduleSync(1500);
   toast(`노트 ${done}개를 가져왔습니다`);
@@ -519,9 +527,24 @@ function dedupeLines(body) {
   return { text: out.join('\n'), removed };
 }
 
+/**
+ * 애플 노트의 마크다운 내보내기 오류를 바로잡습니다.
+ * 애플이 같은 줄을 제각각 여러 번 써 내보내는 문제가 있어,
+ * 붙어서 반복된 줄을 한 번만 남기고 군더더기를 정리합니다.
+ */
+function cleanAppleExport(text) {
+  const { text: deduped, removed } = dedupeLines(text);
+  const cleaned = deduped
+    .split('\n')
+    .map(l => (/^\s*#+\s*$/.test(l) ? '' : l))   // 내용 없는 제목 줄 제거
+    .join('\n')
+    .replace(/\n{4,}/g, '\n\n\n');              // 지나친 빈 줄 줄이기
+  return { text: cleaned, removed };
+}
+
 async function dedupeCurrent() {
   if (!current) return;
-  const { text, removed } = dedupeLines(current.body);
+  const { text, removed } = cleanAppleExport(current.body);
   if (!removed) return toast('반복된 줄이 없습니다');
   if (!confirm(`연달아 반복된 줄 ${removed}개를 지웁니다. 계속할까요?`)) return;
   el.editor.value = text;

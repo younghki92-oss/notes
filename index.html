@@ -123,6 +123,10 @@
     <section class="sheet-sec">
       <h3>애플 노트 가져오기</h3>
       <p class="hint">맥 노트 앱에서 마크다운으로 내보낸 결과를 가져옵니다. <strong>그림까지 가져오려면 반드시 폴더째</strong> 고르세요. 애플은 그림을 <code>Attachments</code> 폴더에 따로 빼두기 때문에, 파일만 고르면 그림이 빠집니다.</p>
+      <label class="check-row">
+        <input id="cleanOnImport" type="checkbox" checked>
+        <span>애플 내보내기 오류 자동 정리 <em>(연달아 똑같이 반복된 줄을 한 번만 남깁니다)</em></span>
+      </label>
       <div class="btn-row">
         <button id="btnImportFiles" class="quiet">파일 고르기</button>
         <button id="btnImportDir" class="quiet">폴더 고르기</button>

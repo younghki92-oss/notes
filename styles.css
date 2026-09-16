@@ -4,7 +4,7 @@
    ───────────────────────────────────────────── */
 
 :root {
-  --build: 'v12';
+  --build: 'v13';
   --paper:      #FCFCFA;
   --paper-2:    #F4F3EF;
   --ink:        #1C1D1A;
@@ -578,6 +578,19 @@ code { font-family: var(--mono); font-size: .9em; }
   font-size: 13px;
   font-family: var(--mono);
 }
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 2px 0 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.check-row input { margin-top: 2px; flex: none; width: 16px; height: 16px; accent-color: var(--accent); }
+.check-row em { font-style: normal; color: var(--ink-faint); }
 
 .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 
