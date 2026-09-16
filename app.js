@@ -186,6 +186,7 @@ function setDot(stateName, label) {
 async function updateSyncBadge() {
   if (drive.state.syncing) return setDot('syncing', '동기화 중');
   if (!drive.wasConnected()) return setDot('off', '연결 안 됨');
+  if (drive.state.needsReconnect) return setDot('error', '눌러서 재연결');
   if (drive.state.lastError) return setDot('error', '동기화 실패');
   const pending = (await db.dirtyNotes()).length;
   if (!navigator.onLine) return setDot('pending', pending ? `대기 ${pending}` : '오프라인');
@@ -272,6 +273,7 @@ el.search.addEventListener('input', e => { query = e.target.value; drawList(); }
 
 $('btnNew').onclick = createNote;
 $('btnNewEmpty').onclick = createNote;
+$('fab').onclick = createNote;
 $('btnBack').onclick = () => { flushSave(); el.app.dataset.view = 'list'; };
 
 $('btnPreview').onclick = async e => {

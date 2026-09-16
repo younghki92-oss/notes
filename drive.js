@@ -13,7 +13,24 @@ const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
-let token = null;        // { access_token, expires_at }
+const TOKEN_KEY = 'gdrive_token';
+
+function loadToken() {
+  try {
+    const t = JSON.parse(localStorage.getItem(TOKEN_KEY) || 'null');
+    if (t && t.access_token && t.expires_at > Date.now() + 120_000) return t;
+  } catch {}
+  return null;
+}
+function saveToken(t) {
+  try { localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); } catch {}
+}
+function clearToken() {
+  try { localStorage.removeItem(TOKEN_KEY); } catch {}
+}
+
+// 앱을 다시 열어도 유효한 토큰이 남아 있으면 그대로 씁니다.
+let token = loadToken();
 let tokenClient = null;
 let gisLoaded = null;
 
@@ -22,7 +39,10 @@ export const state = {
   syncing: false,
   lastError: null,
   lastSync: null,
+  needsReconnect: false,   // 사용자가 직접 눌러야 다시 연결됩니다
 };
+
+let silentFailedAt = 0;
 
 /* ── 설정 ──────────────────────────────────── */
 
@@ -84,6 +104,7 @@ export async function auth(interactive = false) {
         access_token: resp.access_token,
         expires_at: Date.now() + (Number(resp.expires_in) || 3600) * 1000,
       };
+      saveToken(token);
       state.connected = true;
       localStorage.setItem('gdrive_connected', '1');
       resolve(token.access_token);
@@ -99,11 +120,15 @@ export function disconnect() {
     if (token?.access_token) google.accounts.oauth2.revoke(token.access_token, () => {});
   } catch {}
   token = null;
+  clearToken();
   state.connected = false;
   localStorage.removeItem('gdrive_connected');
 }
 
 export const wasConnected = () => localStorage.getItem('gdrive_connected') === '1';
+
+/** 지금 당장 로그인 창 없이 드라이브를 쓸 수 있는가 */
+export const hasLiveToken = () => tokenValid();
 
 /* ── HTTP ──────────────────────────────────── */
 
@@ -115,6 +140,7 @@ async function api(url, opts = {}) {
   });
   if (res.status === 401) {
     token = null;
+    clearToken();
     const at2 = await auth(true);
     return fetch(url, { ...opts, headers: { Authorization: `Bearer ${at2}`, ...(opts.headers || {}) } })
       .then(checkRes);
@@ -217,12 +243,26 @@ export async function sync({ interactive = false } = {}) {
   if (state.syncing) return null;
   if (!navigator.onLine) throw new Error('오프라인입니다. 연결되면 자동으로 올립니다.');
 
+  // 조용한 갱신이 방금 실패했다면, 사용자가 누르기 전까지 다시 시도하지 않습니다.
+  // (그래야 로그인 창이 불쑥 뜨는 일이 없습니다.)
+  if (!interactive && !tokenValid() && Date.now() - silentFailedAt < 30 * 60_000) {
+    state.needsReconnect = true;
+    throw new Error('구글 재연결이 필요합니다. 상태 표시를 눌러 주세요.');
+  }
+  if (interactive) { silentFailedAt = 0; state.needsReconnect = false; }
+
   state.syncing = true;
   state.lastError = null;
   const tally = { pushed: 0, pulled: 0, conflicts: 0, deleted: 0 };
 
   try {
-    await auth(interactive);
+    try {
+      await auth(interactive);
+      state.needsReconnect = false;
+    } catch (e) {
+      if (!interactive) { silentFailedAt = Date.now(); state.needsReconnect = true; }
+      throw e;
+    }
     const folderId = await ensureFolder();
 
     // 1) 원격 목록

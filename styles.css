@@ -500,7 +500,10 @@ code { font-family: var(--mono); font-size: .9em; }
   .pane-editor { display: none; }
   .app[data-view="editor"] .pane-list { display: none; }
   .app[data-view="editor"] .pane-editor { display: flex; }
-  .only-narrow { display: grid; }
+  .only-narrow { display: flex; }
+  .fab { display: grid; }
+  /* 목록 맨 아래 항목이 버튼에 가리지 않도록 */
+  .note-list { padding-bottom: 76px; }
   .editor, .preview { padding-left: 18px; padding-right: 18px; }
   .sheet { padding: 0; align-items: end; }
   .sheet-panel {
@@ -508,6 +511,38 @@ code { font-family: var(--mono); font-size: .9em; }
     max-height: 92dvh;
     padding-bottom: calc(24px + env(safe-area-inset-bottom));
   }
+}
+
+/* ── 떠 있는 새 노트 버튼 ───────────────────── */
+
+.fab {
+  position: fixed;
+  right: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  z-index: 50;
+  display: none;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--paper);
+  box-shadow: 0 6px 20px rgba(0,0,0,.28);
+}
+.fab:active { transform: scale(.94); }
+
+.back-btn {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 7px 9px 7px 5px;
+  font-size: 14px;
+  color: var(--accent);
+  flex: none;
 }
 
 /* ── 손가락으로 쓰는 기기 (폴드·갤럭시) ────────── */
@@ -556,6 +591,9 @@ code { font-family: var(--mono); font-size: .9em; }
   .editor, .preview { padding-top: 14px; padding-bottom: 24vh; }
   .editor-bar { min-height: 42px; padding-top: 5px; padding-bottom: 5px; }
 }
+
+/* 설정 시트가 열려 있으면 FAB 를 숨깁니다 */
+body:has(.sheet:not([hidden])) .fab { display: none; }
 
 /* ── 인쇄 → PDF ─────────────────────────────── */
 
