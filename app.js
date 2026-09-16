@@ -24,6 +24,8 @@ let query = '';
 let activeTag = null;
 let saveTimer = null;
 let statsFull = false;
+let selectMode = false;
+const selected = new Set();
 let syncTimer = null;
 
 /* ── 첨부 이미지 ───────────────────────────── */
@@ -78,6 +80,49 @@ function visible() {
   });
 }
 
+function setSelectMode(on) {
+  selectMode = on;
+  if (!on) selected.clear();
+  el.app.dataset.select = on ? 'on' : '';
+  $('selBar').hidden = !on;
+  $('btnSelect').setAttribute('aria-pressed', String(on));
+  drawSelCount();
+  drawList();
+}
+
+function drawSelCount() {
+  $('selCount').textContent = `${selected.size}개 선택`;
+  $('selDelete').disabled = selected.size === 0;
+  const rows = visible();
+  $('selAll').textContent =
+    rows.length && rows.every(n => selected.has(n.id)) ? '선택 해제' : '전체 선택';
+}
+
+/** 노트와 딸린 그림을 지웁니다. 드라이브를 쓰면 무덤으로 남겨 나중에 정리합니다. */
+async function removeNotes(ids) {
+  const linked = drive.wasConnected();
+  for (const id of ids) {
+    const n = await db.getNote(id);
+    if (!n) continue;
+    if (linked) {
+      await db.trashNote(n);
+    } else {
+      for (const att of (await db.allFiles()).filter(a => a.noteId === id)) {
+        attUrlCache.delete(att.id);
+        await db.purgeFile(att.id);
+      }
+      await db.purge(id);
+    }
+    if (current && current.id === id) {
+      current = null;
+      el.editor.value = '';
+      showEditor(false);
+    }
+  }
+  await reload();
+  if (linked) scheduleSync(800);
+}
+
 function drawTags() {
   const count = new Map();
   for (const n of notes) for (const t of n.tags || []) count.set(t, (count.get(t) || 0) + 1);
@@ -113,7 +158,14 @@ function drawList() {
     b.className = 'note-item';
     b.type = 'button';
     b.setAttribute('role', 'listitem');
-    if (current && n.id === current.id) b.setAttribute('aria-current', 'true');
+    if (current && n.id === current.id && !selectMode) b.setAttribute('aria-current', 'true');
+
+    if (selectMode) {
+      b.dataset.checked = String(selected.has(n.id));
+      const c = document.createElement('span');
+      c.className = 'check';
+      b.appendChild(c);
+    }
 
     const h = document.createElement('h4');
     h.textContent = n.title || '제목 없음';
@@ -125,7 +177,31 @@ function drawList() {
     m.appendChild(document.createTextNode(when(n.modified)));
 
     b.append(h, p, m);
-    b.onclick = () => select(n.id);
+
+    b.onclick = () => {
+      if (!selectMode) return select(n.id);
+      if (selected.has(n.id)) selected.delete(n.id); else selected.add(n.id);
+      b.dataset.checked = String(selected.has(n.id));
+      drawSelCount();
+    };
+
+    // 길게 누르면 선택 모드로 들어갑니다 (애플 노트와 같은 방식)
+    let hold = null;
+    const startHold = () => {
+      hold = setTimeout(() => {
+        hold = null;
+        if (!selectMode) { selected.add(n.id); setSelectMode(true); }
+      }, 480);
+    };
+    const cancelHold = () => { clearTimeout(hold); hold = null; };
+    b.addEventListener('touchstart', startHold, { passive: true });
+    b.addEventListener('touchend', cancelHold);
+    b.addEventListener('touchmove', cancelHold);
+    b.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      if (!selectMode) { selected.add(n.id); setSelectMode(true); }
+    });
+
     el.list.appendChild(b);
   }
 }
@@ -198,12 +274,7 @@ async function createNote() {
 async function deleteCurrent() {
   if (!current) return;
   if (!confirm(`"${current.title}" 을(를) 삭제할까요? 드라이브에서도 지워집니다.`)) return;
-  await db.trashNote(current);
-  current = null;
-  el.editor.value = '';
-  showEditor(false);
-  await reload();
-  scheduleSync();
+  await removeNotes([current.id]);
   toast('삭제했습니다');
 }
 
@@ -395,11 +466,36 @@ el.editor.addEventListener('paste', e => {
 el.editor.addEventListener('input', queueSave);
 el.editor.addEventListener('blur', flushSave);
 
-el.search.addEventListener('input', e => { query = e.target.value; drawList(); });
+el.search.addEventListener('input', e => {
+  query = e.target.value;
+  drawList();
+  if (selectMode) drawSelCount();
+});
 
 $('btnNew').onclick = createNote;
 $('btnNewEmpty').onclick = createNote;
 $('fab').onclick = createNote;
+
+$('btnSelect').onclick = () => setSelectMode(!selectMode);
+$('selCancel').onclick = () => setSelectMode(false);
+
+$('selAll').onclick = () => {
+  const rows = visible();
+  if (rows.length && rows.every(n => selected.has(n.id))) selected.clear();
+  else rows.forEach(n => selected.add(n.id));
+  drawSelCount();
+  drawList();
+};
+
+$('selDelete').onclick = async () => {
+  const ids = [...selected];
+  if (!ids.length) return;
+  if (!confirm(`노트 ${ids.length}개를 삭제할까요? 딸린 그림도 함께 지워집니다.`)) return;
+  const n = ids.length;
+  setSelectMode(false);
+  await removeNotes(ids);
+  toast(`${n}개를 삭제했습니다`);
+};
 $('btnBack').onclick = () => { flushSave(); el.app.dataset.view = 'list'; };
 
 $('btnPreview').onclick = async e => {
@@ -490,9 +586,20 @@ document.addEventListener('keydown', e => {
   if (meta && e.key.toLowerCase() === 'n') { e.preventDefault(); createNote(); }
   if (meta && e.key.toLowerCase() === 'k') { e.preventDefault(); el.search.focus(); el.search.select(); }
   if (meta && e.key.toLowerCase() === 's') { e.preventDefault(); flushSave().then(() => runSync(true)); }
+  if (selectMode && (e.key === 'Delete' || e.key === 'Backspace')
+      && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+    e.preventDefault();
+    $('selDelete').click();
+  }
+  if (meta && e.key.toLowerCase() === 'a' && selectMode
+      && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+    e.preventDefault();
+    $('selAll').click();
+  }
   if (e.key === 'Escape') {
     if (!el.sheet.hidden) el.sheet.hidden = true;
     else if (!el.moreMenu.hidden) el.moreMenu.hidden = true;
+    else if (selectMode) setSelectMode(false);
   }
 });
 

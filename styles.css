@@ -170,6 +170,59 @@ button { cursor: pointer; }
   color: var(--accent);
 }
 
+/* ── 선택 모드 막대 ─────────────────────────── */
+
+.sel-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 3px;
+}
+.sel-bar[hidden] { display: none; }
+.sel-count {
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  text-align: center;
+  white-space: nowrap;
+}
+.sm { padding: 6px 11px; font-size: 12.5px; }
+.danger-btn {
+  background: var(--danger);
+  color: #fff;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 12.5px;
+}
+.danger-btn:disabled { opacity: .4; }
+
+.app[data-select="on"] .tag-bar { display: none; }
+
+.note-item .check {
+  float: left;
+  width: 20px;
+  height: 20px;
+  margin: 1px 10px 0 0;
+  border: 1.6px solid var(--ink-faint);
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.note-item[data-checked="true"] .check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.note-item[data-checked="true"] .check::after {
+  content: '';
+  width: 10px; height: 5px;
+  border: 2px solid var(--paper);
+  border-top: 0; border-right: 0;
+  transform: rotate(-45deg) translateY(-1px);
+}
+.note-item[data-checked="true"] { background: var(--accent-bg); }
+
 /* ── 노트 목록 ───────────────────────────────── */
 
 .note-list {
@@ -215,6 +268,7 @@ button { cursor: pointer; }
   white-space: nowrap;
 }
 .note-item .meta {
+  overflow: hidden;   /* 체크박스 옆으로 정렬되도록 */
   margin-top: 4px;
   font-size: 11px;
   color: var(--ink-faint);
