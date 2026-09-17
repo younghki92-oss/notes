@@ -14,7 +14,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v13';
+const BUILD = 'v14';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -372,7 +372,12 @@ function setDot(stateName, label) {
 }
 
 async function updateSyncBadge() {
-  if (drive.state.syncing) return setDot('syncing', '동기화 중');
+  if (drive.state.syncing) {
+    const p = drive.state.total
+      ? `${drive.state.phase} ${drive.state.done}/${drive.state.total}`
+      : (drive.state.phase || '동기화 중');
+    return setDot('syncing', p);
+  }
   if (!drive.wasConnected()) return setDot('off', '연결 안 됨');
   if (drive.state.needsReconnect) return setDot('error', '눌러서 재연결');
   if (drive.state.lastError) return setDot('error', '동기화 실패');
@@ -390,7 +395,13 @@ function scheduleSync(delay = 4000) {
   updateSyncBadge();
 }
 
+let progressTimer = null;
+
 async function runSync(interactive) {
+  clearInterval(progressTimer);
+  progressTimer = setInterval(() => {
+    if (drive.state.syncing) updateSyncBadge(); else clearInterval(progressTimer);
+  }, 700);
   if (!drive.wasConnected() && !interactive) return;
   try {
     await updateSyncBadge();
@@ -694,6 +705,33 @@ on('btnConnect', 'click', async () => {
     setProp('syncMsg', 'textContent', drive.state.lastError || '동기화 완료.');
   } catch (e) {
     setProp('syncMsg', 'textContent', e.message);
+  }
+});
+
+let lastDiag = '';
+
+on('btnDiagnose', 'click', async () => {
+  const out = $('diagOut');
+  if (out) { out.hidden = false; out.textContent = '조사하는 중… (로그인 창이 뜨면 허용해 주세요)'; }
+  const head = `버전: ${BUILD} / 화면 ${getComputedStyle(document.documentElement)
+    .getPropertyValue('--build').replace(/['"\s]/g, '') || '없음'}\n`
+    + `기기: ${navigator.userAgent.includes('Android') ? '안드로이드' : navigator.userAgent.includes('Mac') ? '맥' : '기타'}`
+    + ` / 화면폭 ${window.innerWidth}px\n`;
+  try {
+    lastDiag = head + await drive.diagnose();
+  } catch (e) {
+    lastDiag = head + '진단 실패: ' + e.message;
+  }
+  if (out) out.textContent = lastDiag;
+});
+
+on('btnCopyDiag', 'click', async () => {
+  if (!lastDiag) return toast('먼저 연결 진단하기를 눌러 주세요');
+  try {
+    await navigator.clipboard.writeText(lastDiag);
+    toast('복사했습니다');
+  } catch {
+    toast('복사가 막혀 있습니다. 결과를 길게 눌러 직접 복사해 주세요');
   }
 });
 

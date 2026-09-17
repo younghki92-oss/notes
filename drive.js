@@ -40,7 +40,14 @@ export const state = {
   lastError: null,
   lastSync: null,
   needsReconnect: false,   // 사용자가 직접 눌러야 다시 연결됩니다
+  phase: '',               // 지금 무슨 일을 하는 중인지
+  done: 0,
+  total: 0,
 };
+
+function progress(phase, done = 0, total = 0) {
+  state.phase = phase; state.done = done; state.total = total;
+}
 
 let silentFailedAt = 0;
 
@@ -279,6 +286,54 @@ async function pullFile(f) {
   return { meta, body };
 }
 
+/** 지금 연결 상태를 조사해 사람이 읽을 수 있는 보고서로 돌려줍니다. */
+export async function diagnose() {
+  const L = [];
+  const add = (k, v) => L.push(`${k}: ${v}`);
+
+  add('인터넷', navigator.onLine ? '연결됨' : '끊김');
+  add('클라이언트ID', getClientId() ? '…' + getClientId().slice(-28) : '없음');
+  add('폴더이름', getFolderName());
+  add('연결기록', wasConnected() ? '있음' : '없음');
+  add('토큰', tokenValid() ? '살아있음' : '없음/만료');
+  add('재연결필요', state.needsReconnect ? '예' : '아니오');
+  const last = await db.metaGet('lastSync');
+  add('마지막동기화', last ? new Date(last).toLocaleString('ko-KR') : '한 번도 없음');
+  add('직전오류', state.lastError || '없음');
+
+  const rows = await db.allRows();
+  const files = await db.allFiles();
+  add('이기기 노트', `${rows.filter(n => !n.deleted).length}개 (올릴 것 ${rows.filter(n => n.dirty && !n.deleted).length})`);
+  add('이기기 그림', `${files.length}개 (올릴 것 ${files.filter(f => f.dirty).length})`);
+
+  try {
+    await auth(true);
+    add('로그인', '성공');
+  } catch (e) {
+    add('로그인', '실패 — ' + e.message);
+    return L.join('\n');
+  }
+
+  try {
+    const folderId = await ensureFolder();
+    add('폴더ID', folderId.slice(0, 12) + '…');
+    let notes = 0, imgs = 0, pageToken = null;
+    do {
+      const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
+      const j = await (await api(`${API}/files?q=${q}&fields=nextPageToken,files(id,appProperties)&pageSize=200`
+        + (pageToken ? '&pageToken=' + pageToken : ''))).json();
+      for (const f of j.files || []) (f.appProperties?.attId ? imgs++ : notes++);
+      pageToken = j.nextPageToken || null;
+    } while (pageToken);
+    add('드라이브 노트', notes + '개');
+    add('드라이브 그림', imgs + '개');
+  } catch (e) {
+    add('드라이브 조회', '실패 — ' + e.message);
+  }
+
+  return L.join('\n');
+}
+
 /** 드라이브 폴더의 노트·그림을 모두 지웁니다. (되돌릴 수 없습니다) */
 export async function wipeRemote() {
   await auth(true);
@@ -295,6 +350,21 @@ export async function wipeRemote() {
     pageToken = j.nextPageToken || null;
   } while (pageToken);
   return removed;
+}
+
+/** 한 번에 여러 건을 처리합니다. 800개를 하나씩 올리면 너무 느립니다. */
+async function pool(items, limit, worker, onTick) {
+  let i = 0, done = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const item = items[i++];
+      try { await worker(item); } catch (e) { if (!/404/.test(e.message)) throw e; }
+      done++;
+      onTick?.(done, items.length);
+    }
+  });
+  await Promise.all(runners);
+  return done;
 }
 
 /* ── 동기화 본체 ───────────────────────────── */
@@ -327,6 +397,7 @@ export async function sync({ interactive = false } = {}) {
       if (!interactive) { silentFailedAt = Date.now(); state.needsReconnect = true; }
       throw e;
     }
+    progress('목록 읽는 중');
     const folderId = await ensureFolder();
 
     // 1) 원격 목록
@@ -353,10 +424,11 @@ export async function sync({ interactive = false } = {}) {
 
     const localFiles = await db.allFiles();
     const haveAtt = new Set(localFiles.map(a => a.id));
-    for (const f of remoteAtts) {
-      if (haveAtt.has(f.appProperties.attId)) continue;
-      await pullAttachment(f);
-      tally.pulled++;
+    const attsToPull = remoteAtts.filter(f => !haveAtt.has(f.appProperties.attId));
+    if (attsToPull.length) {
+      progress('그림 받는 중', 0, attsToPull.length);
+      tally.pulled += await pool(attsToPull, 3, f => pullAttachment(f),
+        (d, t) => progress('그림 받는 중', d, t));
     }
 
     const local = await db.allRows();
@@ -458,17 +530,20 @@ export async function sync({ interactive = false } = {}) {
     }
 
     // 4) 아직 드라이브에 없는 로컬 노트 올리기
-    for (const n of await db.allRows()) {
-      if (n.deleted || !n.dirty) continue;
-      if (n.driveId && remote.has(n.driveId)) continue;
-      await pushNote(n, folderId);
-      tally.pushed++;
+    const toPush = (await db.allRows()).filter(n =>
+      !n.deleted && n.dirty && !(n.driveId && remote.has(n.driveId)));
+    if (toPush.length) {
+      progress('올리는 중', 0, toPush.length);
+      tally.pushed += await pool(toPush, 4, n => pushNote(n, folderId),
+        (d, t) => progress('올리는 중', d, t));
     }
 
     // 아직 안 올라간 그림 올리기
-    for (const att of await db.dirtyFiles()) {
-      await pushAttachment(att, folderId);
-      tally.pushed++;
+    const atts = await db.dirtyFiles();
+    if (atts.length) {
+      progress('그림 올리는 중', 0, atts.length);
+      tally.pushed += await pool(atts, 3, a => pushAttachment(a, folderId),
+        (d, t) => progress('그림 올리는 중', d, t));
     }
 
     state.lastSync = Date.now();
@@ -479,5 +554,6 @@ export async function sync({ interactive = false } = {}) {
     throw e;
   } finally {
     state.syncing = false;
+    progress('');
   }
 }

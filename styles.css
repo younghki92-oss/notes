@@ -4,7 +4,7 @@
    ───────────────────────────────────────────── */
 
 :root {
-  --build: 'v13';
+  --build: 'v14';
   --paper:      #FCFCFA;
   --paper-2:    #F4F3EF;
   --ink:        #1C1D1A;
@@ -578,6 +578,22 @@ code { font-family: var(--mono); font-size: .9em; }
   font-size: 13px;
   font-family: var(--mono);
 }
+
+.diag {
+  margin: 10px 0 4px;
+  padding: 11px 13px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.diag[hidden] { display: none; }
 
 .check-row {
   display: flex;
