@@ -14,7 +14,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v14';
+const BUILD = 'v15';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -390,12 +390,26 @@ async function updateSyncBadge() {
 
 function scheduleSync(delay = 4000) {
   if (!drive.wasConnected()) return;
+  if (drive.state.syncing) return;
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => runSync(false), delay);
   updateSyncBadge();
 }
 
 let progressTimer = null;
+let wakeLock = null;
+
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && 'wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener?.('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+    }
+  } catch { /* 지원하지 않는 기기면 그냥 넘어갑니다 */ }
+}
 
 async function runSync(interactive) {
   clearInterval(progressTimer);
@@ -405,6 +419,7 @@ async function runSync(interactive) {
   if (!drive.wasConnected() && !interactive) return;
   try {
     await updateSyncBadge();
+    await keepAwake(true);
     const r = await drive.sync({ interactive });
     if (!r) return;
     await reload();
@@ -414,6 +429,7 @@ async function runSync(interactive) {
     if (interactive) toast(e.message, 4000);
     setProp('syncMsg', 'textContent', e.message);
   } finally {
+    await keepAwake(false);
     await updateSyncBadge();
   }
 }

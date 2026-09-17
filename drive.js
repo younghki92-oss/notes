@@ -455,18 +455,37 @@ export async function sync({ interactive = false } = {}) {
     }
 
     // 3) 원격 → 로컬
+    //    896개를 하나씩 받으면 너무 느려 중간에 끊깁니다.
+    //    먼저 무엇을 할지 분류한 뒤, 여러 건을 동시에 처리합니다.
+    const toCreate = [];   // 이 기기에 없는 노트
+    const toUpdate = [];   // 다른 기기에서 고친 노트
+    const toResolve = [];  // 양쪽에서 고친 노트 (충돌)
+    const toPushNow = [];  // 여기서만 고친 노트
+
     for (const [fid, f] of remote) {
       const noteId = f.appProperties?.noteId;
-      let n = byDriveId.get(fid) || (noteId ? byNoteId.get(noteId) : null);
+      const n = byDriveId.get(fid) || (noteId ? byNoteId.get(noteId) : null);
 
-      if (!n) {                                   // 이 기기에 없는 노트
+      if (!n) { toCreate.push(f); continue; }
+      if (n.deleted) continue;
+
+      const remoteChanged = n.driveTime !== f.modifiedTime;
+      if (remoteChanged && n.dirty) toResolve.push([n, f]);
+      else if (remoteChanged) toUpdate.push([n, f]);
+      else if (n.dirty) toPushNow.push(n);
+    }
+
+    if (toCreate.length) {
+      progress('노트 받는 중', 0, toCreate.length);
+      tally.pulled += await pool(toCreate, 6, async f => {
+        const noteId = f.appProperties?.noteId;
         const { meta, body } = await pullFile(f);
         const created = meta.created ? Date.parse(meta.created) : Date.parse(f.modifiedTime);
         const fresh = db.newNote(body, {
           id: noteId || meta.id || db.uid(),
           created: created || Date.now(),
           modified: Date.parse(f.modifiedTime),
-          driveId: fid,
+          driveId: f.id,
           driveTime: f.modifiedTime,
           dirty: 0,
         });
@@ -475,42 +494,43 @@ export async function sync({ interactive = false } = {}) {
           fresh.tags = [...new Set([...fresh.tags, ...meta.tags])];
         }
         await db.putNote(fresh);
-        tally.pulled++;
-        continue;
-      }
+      }, (d, t) => progress('노트 받는 중', d, t));
+    }
 
-      if (n.deleted) continue;
-
-      const remoteChanged = n.driveTime !== f.modifiedTime;
-
-      if (remoteChanged && n.dirty) {
-        // ── 충돌: 어느 쪽도 버리지 않습니다 ──
-        const { body } = await pullFile(f);
-        if (body.trim() !== n.body.trim()) {
-          const stamp = new Date().toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' });
-          const copy = db.newNote(body, { created: n.created, dirty: 1 });
-          copy.title = `${n.title} (충돌 ${stamp})`;
-          copy.body = `# ${copy.title}\n\n` + body;
-          await db.putNote(copy);
-          tally.conflicts++;
-        }
-        await pushNote(n, folderId);   // 내 쪽이 원본 파일을 차지합니다
-        tally.pushed++;
-      } else if (remoteChanged) {
+    if (toUpdate.length) {
+      progress('노트 갱신 중', 0, toUpdate.length);
+      tally.pulled += await pool(toUpdate, 6, async ([n, f]) => {
         const { meta, body } = await pullFile(f);
         n.body = body;
         n.title = meta.title || db.titleOf(body);
         n.tags = db.tagsOf(body);
         n.modified = Date.parse(f.modifiedTime);
-        n.driveId = fid;
+        n.driveId = f.id;
         n.driveTime = f.modifiedTime;
         n.dirty = 0;
         await db.putNote(n);
-        tally.pulled++;
-      } else if (n.dirty) {
-        await pushNote(n, folderId);
-        tally.pushed++;
+      }, (d, t) => progress('노트 갱신 중', d, t));
+    }
+
+    for (const [n, f] of toResolve) {
+      // 충돌: 어느 쪽도 버리지 않습니다
+      const { body } = await pullFile(f);
+      if (body.trim() !== n.body.trim()) {
+        const stamp = new Date().toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' });
+        const copy = db.newNote(body, { created: n.created, dirty: 1 });
+        copy.title = `${n.title} (충돌 ${stamp})`;
+        copy.body = `# ${copy.title}\n\n` + body;
+        await db.putNote(copy);
+        tally.conflicts++;
       }
+      await pushNote(n, folderId);
+      tally.pushed++;
+    }
+
+    if (toPushNow.length) {
+      progress('올리는 중', 0, toPushNow.length);
+      tally.pushed += await pool(toPushNow, 4, n => pushNote(n, folderId),
+        (d, t) => progress('올리는 중', d, t));
     }
 
     // 3-2) 다른 기기에서 지운 노트를 이 기기에서도 지웁니다.
