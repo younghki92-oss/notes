@@ -49,6 +49,17 @@ function tx(store, mode, fn) {
   }));
 }
 
+/** 짧은 내용 지문. 동기화에서 "정말 바뀌었나"를 판단하는 데 씁니다. */
+export function hashText(text) {
+  let h = 0x811c9dc5;
+  const t = String(text || '');
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36) + ':' + t.length;
+}
+
 export function uid() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return 'n-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
@@ -101,6 +112,7 @@ export function newNote(body = '', extra = {}) {
     dirty: 1,          // 1 = 드라이브에 올려야 함
     driveId: null,     // 드라이브 파일 id
     driveTime: null,   // 마지막으로 맞춘 원격 modifiedTime
+    syncedHash: null,  // 마지막으로 양쪽이 같았을 때의 본문 지문
     ...extra,
   };
 }

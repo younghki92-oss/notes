@@ -228,6 +228,7 @@ async function pushNote(note, folderId) {
   const j = await r.json();
   note.driveId = j.id;
   note.driveTime = j.modifiedTime;
+  note.syncedHash = db.hashText(note.body);
   note.dirty = 0;
   await db.putNote(note);
   return note;
@@ -472,7 +473,7 @@ export async function sync({ interactive = false } = {}) {
       const remoteChanged = n.driveTime !== f.modifiedTime;
       if (remoteChanged && n.dirty) toResolve.push([n, f]);
       else if (remoteChanged) toUpdate.push([n, f]);
-      else if (n.dirty) toPushNow.push(n);
+      else if (n.dirty && Date.now() - n.modified > 6000) toPushNow.push(n);
     }
 
     if (toCreate.length) {
@@ -487,6 +488,7 @@ export async function sync({ interactive = false } = {}) {
           modified: Date.parse(f.modifiedTime),
           driveId: f.id,
           driveTime: f.modifiedTime,
+          syncedHash: db.hashText(body),
           dirty: 0,
         });
         fresh.title = meta.title || fresh.title;
@@ -507,22 +509,74 @@ export async function sync({ interactive = false } = {}) {
         n.modified = Date.parse(f.modifiedTime);
         n.driveId = f.id;
         n.driveTime = f.modifiedTime;
+        n.syncedHash = db.hashText(body);
         n.dirty = 0;
         await db.putNote(n);
       }, (d, t) => progress('노트 갱신 중', d, t));
     }
 
+    // 충돌 후보: 시각만으로는 알 수 없습니다. 내용을 직접 비교합니다.
     for (const [n, f] of toResolve) {
-      // 충돌: 어느 쪽도 버리지 않습니다
-      const { body } = await pullFile(f);
-      if (body.trim() !== n.body.trim()) {
-        const stamp = new Date().toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' });
-        const copy = db.newNote(body, { created: n.created, dirty: 1 });
-        copy.title = `${n.title} (충돌 ${stamp})`;
-        copy.body = `# ${copy.title}\n\n` + body;
-        await db.putNote(copy);
-        tally.conflicts++;
+      const { meta, body } = await pullFile(f);
+      const remoteHash = db.hashText(body);
+      const localHash = db.hashText(n.body);
+
+      if (remoteHash === localHash) {
+        // 사실 같은 글입니다. 시각만 어긋난 것이니 맞춰만 둡니다.
+        n.driveTime = f.modifiedTime;
+        n.syncedHash = remoteHash;
+        n.dirty = 0;
+        await db.putNote(n);
+        continue;
       }
+
+      // 저쪽이 우리가 마지막으로 맞췄던 그대로라면, 바뀐 건 이쪽뿐입니다.
+      if (n.syncedHash && remoteHash === n.syncedHash) {
+        await pushNote(n, folderId);
+        tally.pushed++;
+        continue;
+      }
+
+      // 이쪽이 마지막으로 맞췄던 그대로라면, 바뀐 건 저쪽뿐입니다.
+      if (n.syncedHash && localHash === n.syncedHash) {
+        n.body = body;
+        n.title = meta.title || db.titleOf(body);
+        n.tags = db.tagsOf(body);
+        n.modified = Date.parse(f.modifiedTime);
+        n.driveTime = f.modifiedTime;
+        n.syncedHash = remoteHash;
+        n.dirty = 0;
+        await db.putNote(n);
+        tally.pulled++;
+        continue;
+      }
+
+      // 한쪽이 다른 쪽을 그대로 품고 있으면(이어 쓰는 중) 긴 쪽을 남깁니다.
+      const a = n.body.trim(), b = body.trim();
+      if (a.startsWith(b) || b.startsWith(a)) {
+        if (a.length >= b.length) {
+          await pushNote(n, folderId);
+          tally.pushed++;
+        } else {
+          n.body = body;
+          n.title = meta.title || db.titleOf(body);
+          n.tags = db.tagsOf(body);
+          n.driveTime = f.modifiedTime;
+          n.syncedHash = remoteHash;
+          n.dirty = 0;
+          await db.putNote(n);
+          tally.pulled++;
+        }
+        continue;
+      }
+
+      // 여기까지 오면 진짜 충돌입니다. 어느 쪽도 버리지 않습니다.
+      const stamp = new Date().toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' });
+      const copy = db.newNote(body, { created: n.created, dirty: 1 });
+      copy.title = `${n.title} (충돌 ${stamp})`;
+      copy.body = `# ${copy.title}\n\n` + body;
+      await db.putNote(copy);
+      tally.conflicts++;
       await pushNote(n, folderId);
       tally.pushed++;
     }
@@ -550,8 +604,10 @@ export async function sync({ interactive = false } = {}) {
     }
 
     // 4) 아직 드라이브에 없는 로컬 노트 올리기
+    const QUIET = 6000;   // 방금 고친 노트는 손이 멈출 때까지 기다립니다
     const toPush = (await db.allRows()).filter(n =>
-      !n.deleted && n.dirty && !(n.driveId && remote.has(n.driveId)));
+      !n.deleted && n.dirty && Date.now() - n.modified > QUIET
+      && !(n.driveId && remote.has(n.driveId)));
     if (toPush.length) {
       progress('올리는 중', 0, toPush.length);
       tally.pushed += await pool(toPush, 4, n => pushNote(n, folderId),
