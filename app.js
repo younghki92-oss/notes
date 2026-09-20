@@ -14,7 +14,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v16';
+const BUILD = 'v17';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -739,6 +739,23 @@ on('btnDiagnose', 'click', async () => {
     lastDiag = head + '진단 실패: ' + e.message;
   }
   if (out) out.textContent = lastDiag;
+});
+
+on('btnDedupe', 'click', async () => {
+  if (!confirm('드라이브에서 같은 노트가 여러 벌 올라간 것을 찾아, 가장 최근 것만 남기고 정리합니다. 계속할까요?')) return;
+  const out = $('diagOut');
+  if (out) { out.hidden = false; out.textContent = '드라이브를 훑는 중…'; }
+  try {
+    const r = await drive.dedupeRemote();
+    const msg = r.removed
+      ? `중복이 있던 노트 ${r.groups}개에서 오래된 파일 ${r.removed}개를 지웠습니다.\n이제 동기화를 한 번 돌려 주세요.`
+      : '중복 파일이 없습니다.';
+    if (out) out.textContent = msg;
+    toast(r.removed ? `중복 ${r.removed}개를 정리했습니다` : '중복이 없습니다');
+    if (r.removed) await runSync(true);
+  } catch (e) {
+    if (out) out.textContent = '정리 실패: ' + e.message;
+  }
 });
 
 on('btnCopyDiag', 'click', async () => {

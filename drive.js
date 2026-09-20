@@ -43,6 +43,7 @@ export const state = {
   phase: '',               // 지금 무슨 일을 하는 중인지
   done: 0,
   total: 0,
+  dupes: 0,               // 드라이브에 남은 중복 파일 수
 };
 
 function progress(phase, done = 0, total = 0) {
@@ -287,6 +288,46 @@ async function pullFile(f) {
   return { meta, body };
 }
 
+/**
+ * 드라이브에서 같은 노트 번호를 단 파일이 여럿이면
+ * 가장 최근 것만 남기고 나머지를 지웁니다.
+ * @returns {{groups:number, removed:number}}
+ */
+export async function dedupeRemote() {
+  await auth(true);
+  const folderId = await ensureFolder();
+
+  const all = [];
+  let pageToken = null;
+  do {
+    const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
+    const j = await (await api(`${API}/files?q=${q}`
+      + `&fields=nextPageToken,files(id,name,modifiedTime,appProperties)&pageSize=200`
+      + (pageToken ? '&pageToken=' + pageToken : ''))).json();
+    all.push(...(j.files || []));
+    pageToken = j.nextPageToken || null;
+  } while (pageToken);
+
+  const groups = new Map();
+  for (const f of all) {
+    const nid = f.appProperties?.noteId;
+    if (!nid) continue;              // 그림이나 표식 없는 파일은 건드리지 않습니다
+    if (!groups.has(nid)) groups.set(nid, []);
+    groups.get(nid).push(f);
+  }
+
+  let removed = 0, dupeGroups = 0;
+  for (const files of groups.values()) {
+    if (files.length < 2) continue;
+    dupeGroups++;
+    files.sort((a, b) => Date.parse(b.modifiedTime) - Date.parse(a.modifiedTime));
+    for (const f of files.slice(1)) {
+      try { await api(`${API}/files/${f.id}`, { method: 'DELETE' }); removed++; } catch {}
+    }
+  }
+  return { groups: dupeGroups, removed };
+}
+
 /** 지금 연결 상태를 조사해 사람이 읽을 수 있는 보고서로 돌려줍니다. */
 export async function diagnose() {
   const L = [];
@@ -319,15 +360,24 @@ export async function diagnose() {
     const folderId = await ensureFolder();
     add('폴더ID', folderId.slice(0, 12) + '…');
     let notes = 0, imgs = 0, pageToken = null;
+    const seen = new Map();
     do {
       const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
       const j = await (await api(`${API}/files?q=${q}&fields=nextPageToken,files(id,appProperties)&pageSize=200`
         + (pageToken ? '&pageToken=' + pageToken : ''))).json();
-      for (const f of j.files || []) (f.appProperties?.attId ? imgs++ : notes++);
+      for (const f of j.files || []) {
+        if (f.appProperties?.attId) { imgs++; continue; }
+        notes++;
+        const nid = f.appProperties?.noteId;
+        if (nid) seen.set(nid, (seen.get(nid) || 0) + 1);
+      }
       pageToken = j.nextPageToken || null;
     } while (pageToken);
+    let dupes = 0;
+    for (const c of seen.values()) if (c > 1) dupes += c - 1;
     add('드라이브 노트', notes + '개');
     add('드라이브 그림', imgs + '개');
+    add('중복 파일', dupes + '개' + (dupes ? ' — 정리가 필요합니다' : ''));
   } catch (e) {
     add('드라이브 조회', '실패 — ' + e.message);
   }
@@ -431,6 +481,24 @@ export async function sync({ interactive = false } = {}) {
       tally.pulled += await pool(attsToPull, 3, f => pullAttachment(f),
         (d, t) => progress('그림 받는 중', d, t));
     }
+
+    // 같은 노트 번호를 단 파일이 둘 이상이면 (예전 버전이 남긴 흔적)
+    // 가장 최근 것만 쓰고 나머지는 이번 동기화에서 건너뜁니다.
+    const byNoteIdRemote = new Map();
+    for (const f of remote.values()) {
+      const nid = f.appProperties?.noteId;
+      if (!nid) continue;
+      const prev = byNoteIdRemote.get(nid);
+      if (!prev || Date.parse(f.modifiedTime) > Date.parse(prev.modifiedTime)) {
+        byNoteIdRemote.set(nid, f);
+      }
+    }
+    let skippedDupes = 0;
+    for (const [fid, f] of [...remote]) {
+      const nid = f.appProperties?.noteId;
+      if (nid && byNoteIdRemote.get(nid)?.id !== fid) { remote.delete(fid); skippedDupes++; }
+    }
+    state.dupes = skippedDupes;
 
     const local = await db.allRows();
     const byDriveId = new Map(local.filter(n => n.driveId).map(n => [n.driveId, n]));
