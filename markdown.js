@@ -27,6 +27,8 @@ function inline(s) {
   t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   t = t.replace(/(^|\W)\*([^*\n]+)\*/g, '$1<em>$2</em>');
   t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  t = t.replace(/==([^=\n]+)==/g, '<mark>$1</mark>');
+  t = t.replace(/&lt;u&gt;([\s\S]*?)&lt;\/u&gt;/g, '<u>$1</u>');
   // 해시태그
   t = t.replace(/(^|[\s(\["'])#([\p{L}\p{N}_/-]{1,50})/gu, (m, p, tag) =>
     /^\d+$/.test(tag) ? m : `${p}<span class="tag">#${tag}</span>`);

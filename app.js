@@ -14,7 +14,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v18';
+const BUILD = 'v19';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -68,6 +68,7 @@ const el = {
   editor: $('editor'), preview: $('preview'), empty: $('empty'), stamp: $('stamp'),
   syncDot: $('syncDot'), syncLabel: $('syncLabel'), toast: $('toast'),
   sheet: $('sheet'), moreMenu: $('moreMenu'), stats: $('stats'),
+  hl: $('hl'), toolbar: $('toolbar'),
 };
 
 let notes = [];
@@ -79,6 +80,32 @@ let statsFull = false;
 let selectMode = false;
 const selected = new Set();
 let syncTimer = null;
+
+/* ── 편집기 형광 표시 ───────────────────────── */
+
+const escHtml = t => String(t)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * 글자 뒤에 깔리는 층을 그립니다. 글자 자체는 textarea 가 보여 주므로
+ * 여기서는 배경색만 칠합니다. (한글 입력 중에도 글자가 보이도록)
+ */
+function drawHighlight() {
+  if (!el.hl) return;
+  const text = el.editor.value;
+  let html = escHtml(text);
+
+  // 제목 줄
+  html = html.replace(/^(#{1,6} .*)$/gm, '<i class="h">$1</i>');
+  // 형광펜
+  html = html.replace(/==([^=\n]+)==/g, '<mark class="m">==$1==</mark>');
+  // 해시태그
+  html = html.replace(/(^|[\s(\["'])#([\p{L}\p{N}_/-]{1,50})/gu,
+    (m, p, tag) => (/^\d+$/.test(tag) ? m : `${p}<mark class="t">#${tag}</mark>`));
+
+  el.hl.innerHTML = html + '\n';
+  el.hl.scrollTop = el.editor.scrollTop;
+}
 
 /* ── 첨부 이미지 ───────────────────────────── */
 
@@ -302,6 +329,8 @@ function toggleList() {
 function showEditor(on) {
   el.empty.hidden = on;
   el.editor.hidden = !on;
+  document.querySelector('.editor-wrap')?.toggleAttribute('hidden', !on);
+  if (el.toolbar) el.toolbar.hidden = !on || localStorage.getItem('showToolbar') === '0';
   if (!on) {
     el.preview.hidden = true;
     $('btnPreview')?.setAttribute('aria-pressed', 'false');
@@ -316,6 +345,7 @@ async function select(id) {
   if (!current) return;
   el.editor.value = current.body;
   el.stamp.textContent = when(current.modified);
+  drawHighlight();
   drawStats();
   showEditor(true);
   drawList();
@@ -601,6 +631,69 @@ async function attachmentBytes(body) {
   return out;
 }
 
+/* ── 서식 버튼 ─────────────────────────────── */
+
+const WRAPS = {
+  b: ['**', '**'], i: ['*', '*'], s: ['~~', '~~'],
+  u: ['<u>', '</u>'], mark: ['==', '=='],
+};
+const LINES = { h: '## ', ul: '- ', todo: '- [ ] ', quote: '> ' };
+
+function applyFormat(kind) {
+  const ta = el.editor;
+  if (!current || ta.hidden) return;
+  const { selectionStart: a, selectionEnd: b, value: v } = ta;
+
+  if (kind === 'tag') {
+    ta.setRangeText('#', a, b, 'end');
+  } else if (WRAPS[kind]) {
+    const [open, close] = WRAPS[kind];
+    const sel = v.slice(a, b) || '내용';
+    ta.setRangeText(open + sel + close, a, b, 'select');
+    if (!v.slice(a, b)) ta.setSelectionRange(a + open.length, a + open.length + sel.length);
+  } else if (LINES[kind]) {
+    const mark = LINES[kind];
+    const start = v.lastIndexOf('\n', a - 1) + 1;
+    const line = v.slice(start, v.indexOf('\n', a) < 0 ? v.length : v.indexOf('\n', a));
+    const already = line.startsWith(mark);
+    ta.setRangeText(already ? line.slice(mark.length) : mark + line,
+      start, start + line.length, 'end');
+  }
+
+  ta.focus();
+  drawHighlight();
+  queueSave();
+}
+
+on('toolbar', 'click', e => {
+  const kind = e.target.closest('button')?.dataset.fmt;
+  if (kind) applyFormat(kind);
+});
+
+/* ── 보기 설정 ─────────────────────────────── */
+
+function applyViewPrefs() {
+  const size = localStorage.getItem('fontSize') || '16';
+  document.documentElement.style.setProperty('--edit-size', size + 'px');
+  setProp('fsLabel', 'textContent', size);
+  const fs = $('fontSize'); if (fs) fs.value = size;
+
+  const showTb = localStorage.getItem('showToolbar') !== '0';
+  if (el.toolbar) el.toolbar.hidden = !showTb;
+  const cb = $('showToolbar'); if (cb) cb.checked = showTb;
+}
+
+on('fontSize', 'input', e => {
+  localStorage.setItem('fontSize', e.target.value);
+  applyViewPrefs();
+  drawHighlight();
+});
+
+on('showToolbar', 'change', e => {
+  localStorage.setItem('showToolbar', e.target.checked ? '1' : '0');
+  applyViewPrefs();
+});
+
 /* ── 설정 시트 ────────────────────────────── */
 
 async function openSheet() {
@@ -629,7 +722,8 @@ on('editor', 'paste', e => {
   insertImages(imgs);
 });
 
-on('editor', 'input', queueSave);
+on('editor', 'input', () => { drawHighlight(); queueSave(); });
+on('editor', 'scroll', () => { if (el.hl) el.hl.scrollTop = el.editor.scrollTop; });
 on('editor', 'blur', flushSave);
 
 on('search', 'input', e => {
@@ -669,6 +763,8 @@ on('btnPreview', 'click', async e => {
   const on = el.preview.hidden;
   el.preview.hidden = !on;
   el.editor.hidden = on;
+  document.querySelector('.editor-wrap')?.toggleAttribute('hidden', on);
+  if (el.toolbar) el.toolbar.hidden = on || localStorage.getItem('showToolbar') === '0';
   e.currentTarget.setAttribute('aria-pressed', String(on));
   if (on && current) el.preview.innerHTML = await renderBody(current.body);
 });
@@ -870,6 +966,7 @@ setInterval(() => { if (document.visibilityState === 'visible') scheduleSync(0);
     banner('화면 구성요소를 찾지 못했습니다 (' + missingIds.slice(0, 4).join(', ')
       + '). 파일 일부만 올라간 상태로 보입니다. 모든 파일을 다시 올려 주세요. — 눌러서 닫기');
   }
+  applyViewPrefs();
   await db.requestPersist();
   await reload();
 
