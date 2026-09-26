@@ -602,6 +602,7 @@ export async function sync({ interactive = false } = {}) {
       const { meta, body } = await pullFile(f);
       const remoteHash = db.hashText(body);
       const localHash = db.hashText(n.body);
+      const base = db.trustedHash(n.syncedHash);   // 예전 지문은 없는 것으로 봅니다
 
       if (remoteHash === localHash) {
         // 사실 같은 글입니다. 시각만 어긋난 것이니 맞춰만 둡니다.
@@ -613,21 +614,21 @@ export async function sync({ interactive = false } = {}) {
       }
 
       // 저쪽이 우리가 마지막으로 맞췄던 그대로라면, 바뀐 건 이쪽뿐입니다.
-      if (n.syncedHash && remoteHash === n.syncedHash) {
+      if (base && remoteHash === base) {
         await pushNote(n, folderId);
         tally.pushed++;
         continue;
       }
 
       // 이쪽이 마지막으로 맞췄던 그대로라면, 바뀐 건 저쪽뿐입니다.
-      if (n.syncedHash && localHash === n.syncedHash) {
+      if (base && localHash === base) {
         await adoptRemote(n, f, meta, body, remoteHash);
         tally.pulled++;
         continue;
       }
 
       // 한쪽이 다른 쪽을 그대로 품고 있으면(이어 쓰는 중) 긴 쪽을 남깁니다.
-      const a = n.body.trim(), b = body.trim();
+      const a = db.canon(n.body), b = db.canon(body);
       if (a.startsWith(b) || b.startsWith(a)) {
         if (a.length >= b.length) {
           await pushNote(n, folderId);
@@ -641,7 +642,7 @@ export async function sync({ interactive = false } = {}) {
 
       // 지문이 없으면(예전에 만들어진 노트) 무엇이 기준인지 알 수 없습니다.
       // 이럴 땐 사본을 만들지 않고, 더 최근에 손댄 쪽을 택합니다.
-      if (!n.syncedHash) {
+      if (!base) {
         const remoteTime = Date.parse(f.modifiedTime) || 0;
         if ((n.modified || 0) >= remoteTime) {
           await pushNote(n, folderId);       // 여기서 더 최근에 고쳤습니다

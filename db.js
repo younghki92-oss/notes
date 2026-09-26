@@ -49,16 +49,35 @@ function tx(store, mode, fn) {
   }));
 }
 
-/** 짧은 내용 지문. 동기화에서 "정말 바뀌었나"를 판단하는 데 씁니다. */
+/**
+ * 비교용으로 글을 가지런히 합니다.
+ * 줄 끝 공백, 빈 줄 개수, 보이지 않는 줄 구분자처럼
+ * 사람이 보기에 같은 글이면 같은 모양이 되도록.
+ */
+export function canon(text) {
+  return String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u2028\u2029]/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/^[ \t]+$/gm, '')
+    .replace(/\n{2,}/g, '\n')   // 빈 줄의 개수·위치 차이는 같은 글로 봅니다
+    .trim();
+}
+
+/** 짧은 내용 지문. 공백 차이는 무시합니다. (c2: 는 이 방식의 표식) */
 export function hashText(text) {
   let h = 0x811c9dc5;
-  const t = String(text || '');
+  const t = canon(text);
   for (let i = 0; i < t.length; i++) {
     h ^= t.charCodeAt(i);
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  return h.toString(36) + ':' + t.length;
+  return 'c2:' + h.toString(36) + ':' + t.length;
 }
+
+/** 예전 방식으로 만든 지문은 믿지 않습니다 (비교 기준이 달라서) */
+export const trustedHash = h => typeof h === 'string' && h.startsWith('c2:') ? h : null;
 
 export function uid() {
   if (crypto.randomUUID) return crypto.randomUUID();

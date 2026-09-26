@@ -15,7 +15,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v20';
+const BUILD = 'v21';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -79,6 +79,7 @@ let activeTag = null;
 let saveTimer = null;
 let statsFull = false;
 let readOnly = false;
+let edited = false;   // 사람이 실제로 손댔을 때만 저장합니다
 let selectMode = false;
 const selected = new Set();
 let syncTimer = null;
@@ -108,6 +109,7 @@ const editorMarkdown = () => htmlToMarkdown(el.editor);
 /** 노트를 편집기에 서식 입혀 넣습니다 */
 async function loadIntoEditor(note) {
   el.editor.innerHTML = markdownToHtml(note.body, await urlsFor(note.body));
+  edited = false;
 }
 
 /* ── 공통 ──────────────────────────────────── */
@@ -348,8 +350,10 @@ function queueSave() {
 async function flushSave() {
   clearTimeout(saveTimer);
   if (!current || el.editor.hidden || readOnly) return;
+  if (!edited) return;                     // 열어 보기만 했으면 저장하지 않습니다
   const body = editorMarkdown();
-  if (body === current.body) return;
+  edited = false;
+  if (db.canon(body) === db.canon(current.body)) return;   // 공백만 다르면 같은 글
   await db.saveBody(current, body);
   el.stamp.textContent = when(current.modified);
   drawStats();
@@ -543,6 +547,7 @@ async function insertImages(fileList) {
     document.execCommand('insertHTML', false,
       `<img src="${url}" data-att="${att.id}" alt="${f.name}"><p><br></p>`);
     any = true;
+    edited = true;
   }
   if (!any) return;
   await flushSave();
@@ -648,6 +653,7 @@ function applyFormat(cmd) {
     document.execCommand(cmd);
   }
 
+  edited = true;
   syncToolbarState();
   queueSave();
 }
@@ -663,6 +669,7 @@ function applyBlock(value) {
   if (!current || readOnly) return;
   el.editor.focus();
   document.execCommand('formatBlock', false, value);
+  edited = true;
   syncToolbarState();
   queueSave();
 }
@@ -752,7 +759,7 @@ on('editor', 'paste', e => {
   insertImages(imgs);
 });
 
-on('editor', 'input', queueSave);
+on('editor', 'input', () => { edited = true; queueSave(); });
 on('editor', 'blur', flushSave);
 
 // 스페이스나 엔터를 친 순간 태그에 색을 입힙니다 (커서가 흔들리지 않는 시점)
@@ -773,7 +780,9 @@ on('editor', 'click', e => {
   box.toggleAttribute('checked', box.checked);
   if (current) {
     const body = editorMarkdown();
-    if (body !== current.body) db.saveBody(current, body).then(() => { reload(); scheduleSync(); });
+    if (db.canon(body) !== db.canon(current.body)) {
+      db.saveBody(current, body).then(() => { reload(); scheduleSync(); });
+    }
   }
 });
 
@@ -970,6 +979,7 @@ document.addEventListener('keydown', e => {
   if (meta && e.key.toLowerCase() === 's') { e.preventDefault(); flushSave().then(() => runSync(true)); }
   if (meta && ['b', 'i', 'u', 'z', 'y'].includes(e.key.toLowerCase())
       && document.activeElement === el.editor) {
+    edited = true;
     setTimeout(() => { syncToolbarState(); queueSave(); }, 0);
   }
   if (selectMode && (e.key === 'Delete' || e.key === 'Backspace')
@@ -1008,9 +1018,9 @@ document.addEventListener('visibilitychange', () => {
   else flushSave();
 });
 window.addEventListener('pagehide', () => {
-  if (!current || el.editor.hidden || readOnly) return;
+  if (!current || el.editor.hidden || readOnly || !edited) return;
   const body = editorMarkdown();
-  if (body !== current.body) db.saveBody(current, body);
+  if (db.canon(body) !== db.canon(current.body)) db.saveBody(current, body);
 });
 
 setInterval(() => { if (document.visibilityState === 'visible') scheduleSync(0); }, 180_000);
