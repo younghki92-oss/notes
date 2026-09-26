@@ -15,7 +15,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v21';
+const BUILD = 'v22';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -641,7 +641,7 @@ function applyFormat(cmd) {
       }
     }
   } else if (cmd === 'todo') {
-    insertTodo();
+    toggleTodo();
   } else if (cmd === 'tag') {
     document.execCommand('insertText', false, '#');
   } else if (cmd === 'undo' || cmd === 'redo') {
@@ -658,10 +658,118 @@ function applyFormat(cmd) {
   queueSave();
 }
 
-/** 체크리스트 한 줄을 넣습니다. */
-function insertTodo() {
-  const li = '<ul><li class="todo"><input type="checkbox"><span>&nbsp;</span></li></ul><p><br></p>';
-  document.execCommand('insertHTML', false, li);
+/* ── 체크리스트 켜고 끄기 ──────────────────────
+   애플 노트처럼, 지금 커서가 있는 줄을 체크리스트로 바꾸고
+   한 번 더 누르면 일반 글로 되돌립니다. */
+
+function caretBlock() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const n = sel.anchorNode;
+  const node = n && (n.nodeType === 1 ? n : n.parentElement);
+  if (!node || !el.editor.contains(node)) return null;
+  return node;
+}
+
+function placeCaretAtEnd(target) {
+  const r = document.createRange();
+  r.selectNodeContents(target);
+  r.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+function makeBox(checked = false) {
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  if (checked) { box.checked = true; box.setAttribute('checked', ''); }
+  return box;
+}
+
+function toggleTodo() {
+  const node = caretBlock();
+
+  // 커서가 편집기 밖이면 맨 끝에 새 체크리스트 한 줄
+  if (!node) {
+    el.editor.focus();
+    document.execCommand('insertHTML', false,
+      '<ul><li class="todo"><input type="checkbox"><span><br></span></li></ul>');
+    return;
+  }
+
+  const todo = node.closest('li.todo');
+
+  // ── 이미 체크리스트면: 일반 글로 되돌립니다
+  if (todo && el.editor.contains(todo)) {
+    const list = todo.parentElement;
+    const p = document.createElement('p');
+    for (const c of [...todo.childNodes]) {
+      if (c.nodeType === 1 && c.tagName === 'INPUT') continue;
+      if (c.nodeType === 1 && c.tagName === 'SPAN' && !c.className) p.append(...c.childNodes);
+      else p.append(c);
+    }
+    if (!p.textContent.trim() && !p.querySelector('img')) p.innerHTML = '<br>';
+
+    // 목록을 이 줄 기준으로 둘로 나눕니다
+    const items = [...list.children];
+    const after = items.slice(items.indexOf(todo) + 1);
+    list.after(p);
+    if (after.length) {
+      const rest = document.createElement(list.tagName);
+      rest.append(...after);
+      p.after(rest);
+    }
+    todo.remove();
+    if (!list.children.length) list.remove();
+    placeCaretAtEnd(p);
+    return;
+  }
+
+  // ── 일반 목록의 한 줄이면: 그 줄만 체크리스트로
+  const li = node.closest('li');
+  if (li && el.editor.contains(li)) {
+    const span = document.createElement('span');
+    span.append(...li.childNodes);
+    li.className = 'todo';
+    li.append(makeBox(), span);
+    placeCaretAtEnd(span);
+    return;
+  }
+
+  // ── 문단·제목·인용이면: 체크리스트로 바꿉니다
+  const block = node.closest('p,div,h1,h2,h3,h4,h5,h6,blockquote');
+  const target = (block && block !== el.editor && el.editor.contains(block)) ? block : null;
+
+  const newLi = document.createElement('li');
+  newLi.className = 'todo';
+  const span = document.createElement('span');
+  if (target) span.append(...target.childNodes);
+  if (!span.textContent.trim() && !span.querySelector('img')) span.innerHTML = '<br>';
+  newLi.append(makeBox(), span);
+
+  // 바로 위가 체크리스트면 거기에 이어 붙입니다
+  const prev = target?.previousElementSibling;
+  if (prev && prev.tagName === 'UL' && prev.lastElementChild?.classList.contains('todo')) {
+    prev.append(newLi);
+    target.remove();
+  } else {
+    const ul = document.createElement('ul');
+    ul.append(newLi);
+    if (target) target.replaceWith(ul);
+    else el.editor.append(ul);
+  }
+  placeCaretAtEnd(span);
+}
+
+/**
+ * 체크리스트에서 엔터를 치면 브라우저가 새 줄을 만들지만
+ * 네모 칸은 따라오지 않습니다. 빠진 칸을 채워 넣습니다.
+ */
+function repairTodos() {
+  for (const li of el.editor.querySelectorAll('li.todo')) {
+    if (!li.querySelector(':scope > input[type="checkbox"]')) li.prepend(makeBox());
+  }
 }
 
 /** 글 단위 스타일(제목/본문/인용) 바꾸기 */
@@ -685,6 +793,8 @@ function syncToolbarState() {
         active = document.queryCommandState(cmd);
       } else if (cmd === 'hilite') {
         active = !!window.getSelection()?.anchorNode?.parentElement?.closest('mark');
+      } else if (cmd === 'todo') {
+        active = !!caretBlock()?.closest('li.todo');
       }
     } catch {}
     b.classList.toggle('on', active);
@@ -759,7 +869,7 @@ on('editor', 'paste', e => {
   insertImages(imgs);
 });
 
-on('editor', 'input', () => { edited = true; queueSave(); });
+on('editor', 'input', () => { edited = true; repairTodos(); queueSave(); });
 on('editor', 'blur', flushSave);
 
 // 스페이스나 엔터를 친 순간 태그에 색을 입힙니다 (커서가 흔들리지 않는 시점)
@@ -773,10 +883,16 @@ on('editor', 'keyup', e => {
 on('editor', 'mouseup', syncToolbarState);
 on('editor', 'focus', syncToolbarState);
 
-// 체크박스는 읽기 모드에서도 누를 수 있습니다
+// 체크 칸을 누를 때 커서가 따라가지 않도록 (맥)
+on('editor', 'mousedown', e => {
+  if (e.target.matches?.('input[type="checkbox"]')) e.preventDefault();
+});
+
+// 체크박스는 읽기 모드에서도 누를 수 있습니다. 누를 때마다 켜고 끕니다.
 on('editor', 'click', e => {
   const box = e.target.closest('input[type="checkbox"]');
   if (!box) return;
+  // 누를 때마다 브라우저가 켜고 끕니다. 그 상태를 저장용으로 옮겨 적습니다.
   box.toggleAttribute('checked', box.checked);
   if (current) {
     const body = editorMarkdown();

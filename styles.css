@@ -4,7 +4,7 @@
    ───────────────────────────────────────────── */
 
 :root {
-  --build: 'v21';
+  --build: 'v22';
   --paper:      #FCFCFA;
   --paper-2:    #F4F3EF;
   --ink:        #1C1D1A;
@@ -458,7 +458,9 @@ button { cursor: pointer; }
   accent-color: var(--accent);
   cursor: pointer;
 }
-.editor li.todo input:checked + span { color: var(--ink-faint); text-decoration: line-through; }
+.editor li.todo input:checked + span,
+.editor li.todo:has(> input:checked) { color: var(--ink-faint); text-decoration: line-through; }
+.editor li.todo:has(> input:checked) > input { text-decoration: none; }
 
 .editor blockquote {
   margin: 0 0 .85em;
