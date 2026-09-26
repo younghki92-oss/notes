@@ -281,6 +281,19 @@ async function pullAttachment(f) {
   });
 }
 
+/** 원격 내용을 이 기기 노트에 반영하고 지문까지 맞춥니다. */
+async function adoptRemote(n, f, meta, body, remoteHash) {
+  n.body = body;
+  n.title = meta?.title || db.titleOf(body);
+  n.tags = db.tagsOf(body);
+  n.modified = Date.parse(f.modifiedTime) || Date.now();
+  n.driveId = f.id;
+  n.driveTime = f.modifiedTime;
+  n.syncedHash = remoteHash || db.hashText(body);
+  n.dirty = 0;
+  await db.putNote(n);
+}
+
 async function pullFile(f) {
   const r = await api(`${API}/files/${f.id}?alt=media`);
   const text = await r.text();
@@ -584,6 +597,7 @@ export async function sync({ interactive = false } = {}) {
     }
 
     // 충돌 후보: 시각만으로는 알 수 없습니다. 내용을 직접 비교합니다.
+    const MAX_COPIES = 3;   // 한 번에 사본이 쏟아지는 것을 막습니다
     for (const [n, f] of toResolve) {
       const { meta, body } = await pullFile(f);
       const remoteHash = db.hashText(body);
@@ -607,14 +621,7 @@ export async function sync({ interactive = false } = {}) {
 
       // 이쪽이 마지막으로 맞췄던 그대로라면, 바뀐 건 저쪽뿐입니다.
       if (n.syncedHash && localHash === n.syncedHash) {
-        n.body = body;
-        n.title = meta.title || db.titleOf(body);
-        n.tags = db.tagsOf(body);
-        n.modified = Date.parse(f.modifiedTime);
-        n.driveTime = f.modifiedTime;
-        n.syncedHash = remoteHash;
-        n.dirty = 0;
-        await db.putNote(n);
+        await adoptRemote(n, f, meta, body, remoteHash);
         tally.pulled++;
         continue;
       }
@@ -626,19 +633,36 @@ export async function sync({ interactive = false } = {}) {
           await pushNote(n, folderId);
           tally.pushed++;
         } else {
-          n.body = body;
-          n.title = meta.title || db.titleOf(body);
-          n.tags = db.tagsOf(body);
-          n.driveTime = f.modifiedTime;
-          n.syncedHash = remoteHash;
-          n.dirty = 0;
-          await db.putNote(n);
+          await adoptRemote(n, f, meta, body, remoteHash);
+          tally.pulled++;
+        }
+        continue;
+      }
+
+      // 지문이 없으면(예전에 만들어진 노트) 무엇이 기준인지 알 수 없습니다.
+      // 이럴 땐 사본을 만들지 않고, 더 최근에 손댄 쪽을 택합니다.
+      if (!n.syncedHash) {
+        const remoteTime = Date.parse(f.modifiedTime) || 0;
+        if ((n.modified || 0) >= remoteTime) {
+          await pushNote(n, folderId);       // 여기서 더 최근에 고쳤습니다
+          tally.pushed++;
+        } else {
+          await adoptRemote(n, f, meta, body, remoteHash);
           tally.pulled++;
         }
         continue;
       }
 
       // 여기까지 오면 진짜 충돌입니다. 어느 쪽도 버리지 않습니다.
+      if (tally.conflicts >= MAX_COPIES) {
+        // 상한을 넘으면 사본 대신 최신 쪽을 택합니다.
+        if ((n.modified || 0) >= (Date.parse(f.modifiedTime) || 0)) {
+          await pushNote(n, folderId); tally.pushed++;
+        } else {
+          await adoptRemote(n, f, meta, body, remoteHash); tally.pulled++;
+        }
+        continue;
+      }
       const stamp = new Date().toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' });
       const copy = db.newNote(body, { created: n.created, dirty: 1 });
       copy.title = `${n.title} (충돌 ${stamp})`;
