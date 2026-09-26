@@ -59,7 +59,7 @@
       <span id="stamp" class="stamp"></span>
       <button id="stats" class="stats" title="분량 자세히 보기"></button>
       <div class="bar-spacer"></div>
-      <button id="btnPreview" class="text-btn" aria-pressed="false">읽기</button>
+      <button id="btnPreview" class="text-btn" aria-pressed="false" title="키보드 잠그고 읽기">읽기</button>
       <div class="menu-wrap">
         <button id="btnMore" class="icon-btn" aria-label="더보기" aria-haspopup="true" aria-expanded="false">
           <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="10" cy="4.5" r="1.4" fill="currentColor"/><circle cx="10" cy="10" r="1.4" fill="currentColor"/><circle cx="10" cy="15.5" r="1.4" fill="currentColor"/></svg>
@@ -78,24 +78,31 @@
     </div>
 
     <div id="toolbar" class="toolbar">
-      <button data-fmt="h" title="제목">H</button>
-      <button data-fmt="b" title="굵게"><b>B</b></button>
-      <button data-fmt="i" title="기울임"><i>I</i></button>
-      <button data-fmt="u" title="밑줄"><u>U</u></button>
-      <button data-fmt="mark" title="형광펜" class="mark-btn">A</button>
-      <button data-fmt="s" title="취소선"><s>S</s></button>
+      <button data-cmd="undo" title="되돌리기 (Ctrl/Cmd+Z)">↺</button>
+      <button data-cmd="redo" title="다시 실행 (Ctrl/Cmd+Shift+Z)">↻</button>
       <span class="tb-sep"></span>
-      <button data-fmt="ul" title="목록">•</button>
-      <button data-fmt="todo" title="체크리스트">☐</button>
-      <button data-fmt="quote" title="인용">❝</button>
-      <button data-fmt="tag" title="태그 넣기">#</button>
+      <select id="blockStyle" class="tb-select" title="글 단위 스타일">
+        <option value="p">본문</option>
+        <option value="h1">제목</option>
+        <option value="h2">소제목</option>
+        <option value="h3">작은 제목</option>
+        <option value="blockquote">인용</option>
+      </select>
+      <span class="tb-sep"></span>
+      <button data-cmd="bold" title="굵게 (Ctrl/Cmd+B)"><b>B</b></button>
+      <button data-cmd="italic" title="기울임 (Ctrl/Cmd+I)"><i>I</i></button>
+      <button data-cmd="underline" title="밑줄 (Ctrl/Cmd+U)"><u>U</u></button>
+      <button data-cmd="hilite" title="형광펜" class="mark-btn">A</button>
+      <button data-cmd="strikeThrough" title="취소선"><s>S</s></button>
+      <span class="tb-sep"></span>
+      <button data-cmd="insertUnorderedList" title="목록">•</button>
+      <button data-cmd="todo" title="체크리스트">☐</button>
+      <button data-cmd="tag" title="태그">#</button>
+      <button data-cmd="removeFormat" title="서식 지우기">⌫</button>
     </div>
 
-    <div class="editor-wrap">
-      <div id="hl" class="editor-hl" aria-hidden="true"></div>
-      <textarea id="editor" class="editor" placeholder="여기서부터 쓰세요.&#10;&#10;첫 줄이 제목이 됩니다. 본문 아무 데나 #태그 를 적으면 자동으로 분류됩니다." spellcheck="false"></textarea>
-    </div>
-    <div id="preview" class="preview" hidden></div>
+    <div id="editor" class="editor" contenteditable="true" spellcheck="false"
+         data-placeholder="여기서부터 쓰세요. 첫 줄이 제목이 됩니다."></div>
 
     <div id="empty" class="empty">
       <p>왼쪽에서 노트를 고르거나, 새 노트를 시작하세요.</p>

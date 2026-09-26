@@ -36,15 +36,22 @@ function inline(s) {
 }
 
 /** 마크다운 → HTML 문자열 */
+export const normalize = t => String(t || '')
+  .replace(/\r\n?/g, '\n')
+  .replace(/[\u2028\u2029]/g, '\n')
+  .replace(/\u0000/g, '');
+
 export function render(md) {
-  const lines = String(md || '').replace(/\r\n?/g, '\n').split('\n');
+  const lines = normalize(md).split('\n');
   const out = [];
   let i = 0;
+  let stuck = 0, last = -1;
 
   const closeList = stack => { while (stack.length) out.push(`</${stack.pop()}>`); };
   const listStack = [];
 
   while (i < lines.length) {
+    if (i === last) { if (++stuck > 2) { i++; stuck = 0; continue; } } else { stuck = 0; last = i; }
     const line = lines[i];
 
     // 코드 블록
@@ -117,7 +124,7 @@ export function render(md) {
 
 /** `---` 로 감싼 앞머리를 떼어내고 {meta, body} 로 돌려줍니다. */
 export function splitFrontmatter(text) {
-  const t = String(text || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const t = normalize(String(text || '').replace(/^\uFEFF/, ''));
   const m = t.match(/^---\n([\s\S]*?)\n---\n?/);
   if (!m) return { meta: {}, body: t };
   const meta = {};

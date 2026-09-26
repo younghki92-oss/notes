@@ -39,7 +39,9 @@ function paraHeight(text, sizePt = BODY_PT, indentPt = 0) {
  *            pages:number, minutes:number, images:number}}
  */
 export function measure(body, { wordsPerMinuteChars = 300 } = {}) {
-  const src = String(body || '').replace(/\r\n?/g, '\n');
+  const src = String(body || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u2028\u2029]/g, '\n');
 
   // 글자·단어는 마크다운 기호를 뺀 실제 읽을 글자 기준
   const plain = src
