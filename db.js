@@ -132,6 +132,7 @@ export function newNote(body = '', extra = {}) {
     driveId: null,     // 드라이브 파일 id
     driveTime: null,   // 마지막으로 맞춘 원격 modifiedTime
     syncedHash: null,  // 마지막으로 양쪽이 같았을 때의 본문 지문
+    syncedBody: null,  // 그때의 본문 자체 (두 기기의 변경을 합칠 때 기준으로 씁니다)
     ...extra,
   };
 }
@@ -147,22 +148,63 @@ export function putNote(note) {
   return tx(STORE, 'readwrite', s => s.put(note)).then(() => note);
 }
 
-export function saveBody(note, body) {
-  note.body = body;
-  note.title = titleOf(body);
-  note.tags = tagsOf(body);
-  note.modified = Date.now();
-  note.dirty = 1;
-  return putNote(note);
+/**
+ * 한 번의 거래 안에서 가장 최신 기록을 읽고, 필요한 칸만 고쳐 씁니다.
+ *
+ * 편집 화면과 동기화가 같은 노트의 서로 다른 사본을 들고 있다가
+ * 통째로 덮어쓰면, 한쪽이 적어 둔 내용을 다른 쪽이 지워 버립니다.
+ * (충돌이 반복되던 진짜 원인) 그래서 모든 수정은 이 길로만 합니다.
+ *
+ * fn 은 최신 기록을 받아 고칩니다. false 를 돌려주면 쓰지 않습니다.
+ * fn 안에서는 기다리는 일(await)을 하면 안 됩니다.
+ */
+export function updateNote(id, fn) {
+  return open().then(db => new Promise((resolve, reject) => {
+    const t = db.transaction(STORE, 'readwrite');
+    const s = t.objectStore(STORE);
+    let result = null;
+    const req = s.get(id);
+    req.onsuccess = () => {
+      const rec = req.result;
+      if (!rec) return;
+      if (fn(rec) === false) { result = rec; return; }
+      s.put(rec);
+      result = rec;
+    };
+    t.oncomplete = () => resolve(result);
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error);
+  }));
+}
+
+/** 본문만 고칩니다. 동기화 기록(드라이브 id, 시각, 기준본)은 건드리지 않습니다. */
+export async function saveBody(note, body) {
+  const now = Date.now();
+  const apply = r => {
+    r.body = body;
+    r.title = titleOf(body);
+    r.tags = tagsOf(body);
+    r.modified = now;
+    r.dirty = 1;
+  };
+  const rec = await updateNote(note.id, apply);
+  if (rec) Object.assign(note, rec);          // 들고 있던 사본도 최신으로
+  else { apply(note); await putNote(note); }  // 아직 저장된 적 없는 새 노트
+  return note;
 }
 
 /** 삭제는 무덤(tombstone)으로 남깁니다. 동기화가 끝나야 진짜 지웁니다. */
-export function trashNote(note) {
-  note.deleted = true;
-  note.body = '';
-  note.modified = Date.now();
-  note.dirty = 1;
-  return putNote(note);
+export async function trashNote(note) {
+  const apply = r => {
+    r.deleted = true;
+    r.body = '';
+    r.modified = Date.now();
+    r.dirty = 1;
+  };
+  const rec = await updateNote(note.id, apply);
+  if (rec) Object.assign(note, rec);
+  else { apply(note); await putNote(note); }
+  return note;
 }
 
 export const purge = id => tx(STORE, 'readwrite', s => s.delete(id));

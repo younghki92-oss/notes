@@ -7,6 +7,7 @@ import * as db from './db.js';
 import * as drive from './drive.js';
 import { render, splitFrontmatter, setAttachmentUrls } from './markdown.js';
 import { htmlToMarkdown, markdownToHtml, highlightTagAtCaret, normalizeText } from './richtext.js';
+import { merge3 } from './merge.js';
 import { measure, shortLabel, fullLabel } from './stats.js';
 import { exportMarkdown, exportDocx, printNote, exportAllZip } from './export.js';
 
@@ -15,7 +16,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v22';
+const BUILD = 'v23';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -80,6 +81,7 @@ let saveTimer = null;
 let statsFull = false;
 let readOnly = false;
 let edited = false;   // 사람이 실제로 손댔을 때만 저장합니다
+let editorBase = '';  // 편집 화면이 마지막으로 불러오거나 저장한 본문
 let selectMode = false;
 const selected = new Set();
 let syncTimer = null;
@@ -107,9 +109,12 @@ async function renderBody(body) {
 const editorMarkdown = () => htmlToMarkdown(el.editor);
 
 /** 노트를 편집기에 서식 입혀 넣습니다 */
-async function loadIntoEditor(note) {
+async function loadIntoEditor(note, { keepScroll = false } = {}) {
+  const top = el.editor.scrollTop;
   el.editor.innerHTML = markdownToHtml(note.body, await urlsFor(note.body));
+  editorBase = note.body;
   edited = false;
+  if (keepScroll) el.editor.scrollTop = top;
 }
 
 /* ── 공통 ──────────────────────────────────── */
@@ -347,14 +352,46 @@ function queueSave() {
   saveTimer = setTimeout(flushSave, 400);
 }
 
+let saving = null;
+
 async function flushSave() {
   clearTimeout(saveTimer);
   if (!current || el.editor.hidden || readOnly) return;
   if (!edited) return;                     // 열어 보기만 했으면 저장하지 않습니다
+  if (saving) await saving;                // 저장은 한 번에 하나씩
+  saving = doSave().finally(() => { saving = null; });
+  return saving;
+}
+
+async function doSave() {
+  if (!edited || !current) return;
   const body = editorMarkdown();
   edited = false;
-  if (db.canon(body) === db.canon(current.body)) return;   // 공백만 다르면 같은 글
-  await db.saveBody(current, body);
+
+  // 편집하는 사이에 동기화가 다른 기기의 글을 받아 두었는지 봅니다
+  const stored = await db.getNote(current.id);
+  if (stored && db.canon(stored.body) !== db.canon(editorBase)) {
+    const m = merge3(editorBase, body, stored.body);
+    if (m.ok) {
+      await db.saveBody(current, m.text);
+      if (db.canon(m.text) !== db.canon(body)) {
+        await loadIntoEditor(current, { keepScroll: true });
+        toast('다른 기기에서 고친 내용을 합쳤습니다');
+      } else editorBase = m.text;
+    } else {
+      // 같은 줄을 동시에 고쳤을 때만: 지금 쓰는 글이 원본, 다른 기기 글은 사본으로
+      const stamp = new Date().toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' });
+      const copy = db.newNote(`# ${current.title} (다른 기기 ${stamp})\n\n${stored.body}`);
+      await db.putNote(copy);
+      await db.saveBody(current, body);
+      editorBase = body;
+      toast('같은 곳을 다른 기기에서도 고쳐, 그 글을 사본으로 남겼습니다', 5000);
+    }
+  } else {
+    if (db.canon(body) === db.canon(current.body)) { editorBase = body; return; }
+    await db.saveBody(current, body);
+    editorBase = body;
+  }
   el.stamp.textContent = when(current.modified);
   drawStats();
   await reload();
@@ -410,6 +447,24 @@ function scheduleSync(delay = 4000) {
 }
 
 let progressTimer = null;
+
+/**
+ * 동기화가 열려 있는 노트를 새 글로 바꿨다면 화면에도 반영합니다.
+ * (그러지 않으면 옛 글 위에 이어 쓰다가 다른 기기의 변경을 덮어씁니다)
+ */
+async function refreshOpenNote() {
+  if (!current) return;
+  const fresh = await db.getNote(current.id);
+  if (!fresh || fresh.deleted) return;
+  if (edited) { Object.assign(current, { driveTime: fresh.driveTime }); return; }  // 저장 때 합칩니다
+  const changed = db.canon(fresh.body) !== db.canon(editorBase);
+  current = fresh;
+  if (changed && !el.editor.hidden) {
+    await loadIntoEditor(current, { keepScroll: true });
+    el.stamp.textContent = when(current.modified);
+    drawStats();
+  }
+}
 let wakeLock = null;
 
 async function keepAwake(on) {
@@ -431,12 +486,15 @@ async function runSync(interactive) {
   }, 700);
   if (!drive.wasConnected() && !interactive) return;
   try {
+    await flushSave();                     // 쓰던 글부터 저장
     await updateSyncBadge();
     await keepAwake(true);
     const r = await drive.sync({ interactive });
     if (!r) return;
     await reload();
-    if (r.conflicts) toast(`충돌 ${r.conflicts}건 — 사본을 따로 만들어 두었습니다`, 5000);
+    await refreshOpenNote();
+    if (r.conflicts) toast(`같은 곳을 양쪽에서 고친 노트 ${r.conflicts}개는 다른 기기 글을 사본으로 남겼습니다`, 6000);
+    else if (r.merged) toast(`다른 기기의 변경을 ${r.merged}개 노트에 합쳤습니다`);
     else if (interactive) toast(`올림 ${r.pushed} · 내림 ${r.pulled}`);
   } catch (e) {
     if (interactive) toast(e.message, 4000);
@@ -895,10 +953,8 @@ on('editor', 'click', e => {
   // 누를 때마다 브라우저가 켜고 끕니다. 그 상태를 저장용으로 옮겨 적습니다.
   box.toggleAttribute('checked', box.checked);
   if (current) {
-    const body = editorMarkdown();
-    if (db.canon(body) !== db.canon(current.body)) {
-      db.saveBody(current, body).then(() => { reload(); scheduleSync(); });
-    }
+    edited = true;
+    flushSave().then(() => { reload(); scheduleSync(); });
   }
 });
 
@@ -1136,7 +1192,7 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', () => {
   if (!current || el.editor.hidden || readOnly || !edited) return;
   const body = editorMarkdown();
-  if (db.canon(body) !== db.canon(current.body)) db.saveBody(current, body);
+  if (db.canon(body) !== db.canon(editorBase)) db.saveBody(current, body);
 });
 
 setInterval(() => { if (document.visibilityState === 'visible') scheduleSync(0); }, 180_000);

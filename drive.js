@@ -7,6 +7,7 @@
 
 import * as db from './db.js';
 import { buildFrontmatter, splitFrontmatter } from './markdown.js';
+import { merge3 } from './merge.js';
 
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const API = 'https://www.googleapis.com/drive/v3';
@@ -209,15 +210,19 @@ function multipart(metadata, text) {
 }
 
 async function pushNote(note, folderId) {
-  const text = buildFrontmatter(note) + note.body;
+  // 동기화가 시작된 뒤에도 계속 타이핑했을 수 있으니 가장 최신 본문을 올립니다
+  const fresh = (await db.getNote(note.id)) || note;
+  const pushedBody = fresh.body;
+  const text = buildFrontmatter(fresh) + pushedBody;
   const meta = {
-    name: fileNameFor(note),
+    name: fileNameFor(fresh),
     mimeType: 'text/markdown',
-    appProperties: { noteId: note.id },
+    appProperties: { noteId: fresh.id },
   };
+  const driveId = fresh.driveId || note.driveId;
   let url, method;
-  if (note.driveId) {
-    url = `${UPLOAD}/files/${note.driveId}?uploadType=multipart&fields=id,modifiedTime`;
+  if (driveId) {
+    url = `${UPLOAD}/files/${driveId}?uploadType=multipart&fields=id,modifiedTime`;
     method = 'PATCH';
   } else {
     meta.parents = [folderId];
@@ -227,11 +232,17 @@ async function pushNote(note, folderId) {
   const { body, type } = multipart(meta, text);
   const r = await api(url, { method, headers: { 'Content-Type': type }, body });
   const j = await r.json();
-  note.driveId = j.id;
-  note.driveTime = j.modifiedTime;
-  note.syncedHash = db.hashText(note.body);
-  note.dirty = 0;
-  await db.putNote(note);
+
+  // 본문은 건드리지 않고 동기화 기록만 적습니다.
+  // 올리는 사이에 또 고쳤다면 '올릴 것' 표시를 남겨 다음 차례에 다시 올립니다.
+  const rec = await db.updateNote(note.id, x => {
+    x.driveId = j.id;
+    x.driveTime = j.modifiedTime;
+    x.syncedHash = db.hashText(pushedBody);
+    x.syncedBody = pushedBody;
+    if (db.canon(x.body) === db.canon(pushedBody)) x.dirty = 0;
+  });
+  if (rec) Object.assign(note, rec);
   return note;
 }
 
@@ -281,17 +292,41 @@ async function pullAttachment(f) {
   });
 }
 
-/** 원격 내용을 이 기기 노트에 반영하고 지문까지 맞춥니다. */
-async function adoptRemote(n, f, meta, body, remoteHash) {
-  n.body = body;
-  n.title = meta?.title || db.titleOf(body);
-  n.tags = db.tagsOf(body);
-  n.modified = Date.parse(f.modifiedTime) || Date.now();
-  n.driveId = f.id;
-  n.driveTime = f.modifiedTime;
-  n.syncedHash = remoteHash || db.hashText(body);
-  n.dirty = 0;
-  await db.putNote(n);
+/**
+ * 다른 기기의 글을 이 기기에 받아들입니다.
+ * 판단한 뒤로 이 기기에서 또 고쳤다면 받아들이지 않습니다 (다음 차례에 합칩니다).
+ * @returns 받아들였으면 true
+ */
+async function adoptRemote(n, f, meta, body) {
+  const seen = n.body;   // 판단할 때 본 이 기기의 본문
+  let taken = false;
+  const rec = await db.updateNote(n.id, x => {
+    if (x.dirty && db.canon(x.body) !== db.canon(seen)) return false;
+    x.body = body;
+    x.title = meta?.title || db.titleOf(body);
+    x.tags = db.tagsOf(body);
+    x.modified = Date.parse(f.modifiedTime) || Date.now();
+    x.driveId = f.id;
+    x.driveTime = f.modifiedTime;
+    x.syncedHash = db.hashText(body);
+    x.syncedBody = body;
+    x.dirty = 0;
+    taken = true;
+  });
+  if (rec) Object.assign(n, rec);
+  return taken;
+}
+
+/** 내용은 같고 시각만 어긋났을 때: 기록만 맞춥니다. */
+async function markInSync(n, f, body) {
+  const rec = await db.updateNote(n.id, x => {
+    x.driveId = f.id;
+    x.driveTime = f.modifiedTime;
+    x.syncedHash = db.hashText(body);
+    x.syncedBody = body;
+    if (db.canon(x.body) === db.canon(body)) x.dirty = 0;
+  });
+  if (rec) Object.assign(n, rec);
 }
 
 async function pullFile(f) {
@@ -537,12 +572,12 @@ export async function sync({ interactive = false } = {}) {
     }
 
     // 3) 원격 → 로컬
-    //    896개를 하나씩 받으면 너무 느려 중간에 끊깁니다.
     //    먼저 무엇을 할지 분류한 뒤, 여러 건을 동시에 처리합니다.
     const toCreate = [];   // 이 기기에 없는 노트
-    const toUpdate = [];   // 다른 기기에서 고친 노트
-    const toResolve = [];  // 양쪽에서 고친 노트 (충돌)
+    const toUpdate = [];   // 다른 기기에서만 고친 노트
+    const toResolve = [];  // 양쪽에서 고친 노트 → 합칩니다
     const toPushNow = [];  // 여기서만 고친 노트
+    const toBackfill = []; // 기준본이 아직 없는, 이미 맞춰진 노트
 
     for (const [fid, f] of remote) {
       const noteId = f.appProperties?.noteId;
@@ -554,7 +589,8 @@ export async function sync({ interactive = false } = {}) {
       const remoteChanged = n.driveTime !== f.modifiedTime;
       if (remoteChanged && n.dirty) toResolve.push([n, f]);
       else if (remoteChanged) toUpdate.push([n, f]);
-      else if (n.dirty && Date.now() - n.modified > 6000) toPushNow.push(n);
+      else if (n.dirty) toPushNow.push(n);
+      else if (n.syncedBody == null) toBackfill.push(n);
     }
 
     if (toCreate.length) {
@@ -570,6 +606,7 @@ export async function sync({ interactive = false } = {}) {
           driveId: f.id,
           driveTime: f.modifiedTime,
           syncedHash: db.hashText(body),
+          syncedBody: body,
           dirty: 0,
         });
         fresh.title = meta.title || fresh.title;
@@ -582,94 +619,67 @@ export async function sync({ interactive = false } = {}) {
 
     if (toUpdate.length) {
       progress('노트 갱신 중', 0, toUpdate.length);
-      tally.pulled += await pool(toUpdate, 6, async ([n, f]) => {
+      await pool(toUpdate, 6, async ([n, f]) => {
         const { meta, body } = await pullFile(f);
-        n.body = body;
-        n.title = meta.title || db.titleOf(body);
-        n.tags = db.tagsOf(body);
-        n.modified = Date.parse(f.modifiedTime);
-        n.driveId = f.id;
-        n.driveTime = f.modifiedTime;
-        n.syncedHash = db.hashText(body);
-        n.dirty = 0;
-        await db.putNote(n);
+        if (await adoptRemote(n, f, meta, body)) tally.pulled++;
       }, (d, t) => progress('노트 갱신 중', d, t));
     }
 
-    // 충돌 후보: 시각만으로는 알 수 없습니다. 내용을 직접 비교합니다.
-    const MAX_COPIES = 3;   // 한 번에 사본이 쏟아지는 것을 막습니다
+    // 양쪽에서 고친 노트: 기준본과 비교해 변경을 합칩니다.
     for (const [n, f] of toResolve) {
-      const { meta, body } = await pullFile(f);
-      const remoteHash = db.hashText(body);
-      const localHash = db.hashText(n.body);
-      const base = db.trustedHash(n.syncedHash);   // 예전 지문은 없는 것으로 봅니다
+      const { meta, body: theirs } = await pullFile(f);
+      const mine = ((await db.getNote(n.id)) || n).body;
+      n.body = mine;
 
-      if (remoteHash === localHash) {
-        // 사실 같은 글입니다. 시각만 어긋난 것이니 맞춰만 둡니다.
-        n.driveTime = f.modifiedTime;
-        n.syncedHash = remoteHash;
-        n.dirty = 0;
-        await db.putNote(n);
+      if (db.canon(mine) === db.canon(theirs)) {         // 결국 같은 글
+        await markInSync(n, f, theirs);
         continue;
       }
 
-      // 저쪽이 우리가 마지막으로 맞췄던 그대로라면, 바뀐 건 이쪽뿐입니다.
-      if (base && remoteHash === base) {
-        await pushNote(n, folderId);
-        tally.pushed++;
+      const base = n.syncedBody;
+      if (base != null && db.canon(theirs) === db.canon(base)) {   // 저쪽은 그대로
+        await pushNote(n, folderId); tally.pushed++;
+        continue;
+      }
+      if (base != null && db.canon(mine) === db.canon(base)) {     // 이쪽은 그대로
+        if (await adoptRemote(n, f, meta, theirs)) tally.pulled++;
         continue;
       }
 
-      // 이쪽이 마지막으로 맞췄던 그대로라면, 바뀐 건 저쪽뿐입니다.
-      if (base && localHash === base) {
-        await adoptRemote(n, f, meta, body, remoteHash);
-        tally.pulled++;
-        continue;
-      }
-
-      // 한쪽이 다른 쪽을 그대로 품고 있으면(이어 쓰는 중) 긴 쪽을 남깁니다.
-      const a = db.canon(n.body), b = db.canon(body);
-      if (a.startsWith(b) || b.startsWith(a)) {
-        if (a.length >= b.length) {
+      // 둘 다 고쳤습니다. 기준본이 있으면 줄 단위로 합칩니다.
+      const merged = base != null ? merge3(base, mine, theirs) : { ok: false };
+      if (merged.ok) {
+        const rec = await db.updateNote(n.id, x => {
+          if (db.canon(x.body) !== db.canon(mine)) return false;   // 그 사이 또 고침 → 다음 차례
+          x.body = merged.text;
+          x.title = db.titleOf(merged.text);
+          x.tags = db.tagsOf(merged.text);
+          x.driveTime = f.modifiedTime;          // 저쪽 것까지 반영했으니 기준을 옮깁니다
+          x.syncedHash = db.hashText(theirs);
+          x.syncedBody = theirs;
+          x.dirty = 1;
+        });
+        if (rec && db.canon(rec.body) === db.canon(merged.text)) {
+          Object.assign(n, rec);
           await pushNote(n, folderId);
-          tally.pushed++;
-        } else {
-          await adoptRemote(n, f, meta, body, remoteHash);
-          tally.pulled++;
+          tally.merged = (tally.merged || 0) + 1;
         }
         continue;
       }
 
-      // 지문이 없으면(예전에 만들어진 노트) 무엇이 기준인지 알 수 없습니다.
-      // 이럴 땐 사본을 만들지 않고, 더 최근에 손댄 쪽을 택합니다.
-      if (!base) {
-        const remoteTime = Date.parse(f.modifiedTime) || 0;
-        if ((n.modified || 0) >= remoteTime) {
-          await pushNote(n, folderId);       // 여기서 더 최근에 고쳤습니다
-          tally.pushed++;
-        } else {
-          await adoptRemote(n, f, meta, body, remoteHash);
-          tally.pulled++;
-        }
-        continue;
-      }
-
-      // 여기까지 오면 진짜 충돌입니다. 어느 쪽도 버리지 않습니다.
-      if (tally.conflicts >= MAX_COPIES) {
-        // 상한을 넘으면 사본 대신 최신 쪽을 택합니다.
-        if ((n.modified || 0) >= (Date.parse(f.modifiedTime) || 0)) {
-          await pushNote(n, folderId); tally.pushed++;
-        } else {
-          await adoptRemote(n, f, meta, body, remoteHash); tally.pulled++;
-        }
-        continue;
-      }
+      // 같은 줄을 양쪽에서 다르게 고쳤을 때만, 저쪽 글을 사본으로 남깁니다.
+      // (이 기기의 글이 원본 자리를 지키고, 어느 쪽 글도 사라지지 않습니다)
       const stamp = new Date().toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' });
-      const copy = db.newNote(body, { created: n.created, dirty: 1 });
-      copy.title = `${n.title} (충돌 ${stamp})`;
-      copy.body = `# ${copy.title}\n\n` + body;
+      const copy = db.newNote(theirs, { created: n.created, dirty: 1 });
+      copy.title = `${n.title} (다른 기기 ${stamp})`;
+      copy.body = `# ${copy.title}\n\n` + theirs;
       await db.putNote(copy);
       tally.conflicts++;
+      await db.updateNote(n.id, x => {
+        x.driveTime = f.modifiedTime;
+        x.syncedHash = db.hashText(theirs);
+        x.syncedBody = theirs;
+      });
       await pushNote(n, folderId);
       tally.pushed++;
     }
@@ -678,6 +688,15 @@ export async function sync({ interactive = false } = {}) {
       progress('올리는 중', 0, toPushNow.length);
       tally.pushed += await pool(toPushNow, 4, n => pushNote(n, folderId),
         (d, t) => progress('올리는 중', d, t));
+    }
+
+    // 이미 맞춰진 노트에 기준본을 채워 둡니다 (다음에 합칠 수 있도록, 한 번만)
+    for (const n of toBackfill) {
+      await db.updateNote(n.id, x => {
+        if (x.dirty || x.syncedBody != null) return false;
+        x.syncedBody = x.body;
+        x.syncedHash = db.hashText(x.body);
+      });
     }
 
     // 3-2) 다른 기기에서 지운 노트를 이 기기에서도 지웁니다.
@@ -697,10 +716,8 @@ export async function sync({ interactive = false } = {}) {
     }
 
     // 4) 아직 드라이브에 없는 로컬 노트 올리기
-    const QUIET = 6000;   // 방금 고친 노트는 손이 멈출 때까지 기다립니다
     const toPush = (await db.allRows()).filter(n =>
-      !n.deleted && n.dirty && Date.now() - n.modified > QUIET
-      && !(n.driveId && remote.has(n.driveId)));
+      !n.deleted && n.dirty && !(n.driveId && remote.has(n.driveId)));
     if (toPush.length) {
       progress('올리는 중', 0, toPush.length);
       tally.pushed += await pool(toPush, 4, n => pushNote(n, folderId),
