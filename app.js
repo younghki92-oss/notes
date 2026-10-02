@@ -6,7 +6,7 @@
 import * as db from './db.js';
 import * as drive from './drive.js';
 import { render, splitFrontmatter, setAttachmentUrls } from './markdown.js';
-import { htmlToMarkdown, markdownToHtml, highlightTagAtCaret, normalizeText } from './richtext.js';
+import { htmlToMarkdown, markdownToHtml, normalizeText } from './richtext.js';
 import { merge3 } from './merge.js';
 import { measure, shortLabel, fullLabel } from './stats.js';
 import { exportMarkdown, exportDocx, printNote, exportAllZip } from './export.js';
@@ -16,7 +16,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v24';
+const BUILD = 'v25';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -86,6 +86,40 @@ let selectMode = false;
 const selected = new Set();
 let syncTimer = null;
 
+/* ── 태그 칠하기 ───────────────────────────────
+   글자를 상자로 감싸면, 그 뒤에 치는 글자까지 상자 안으로 빨려 들어가
+   띄어쓰기 뒤나 다음 줄까지 색이 번집니다.
+   그래서 글자는 그대로 두고, 화면 위에 형광펜처럼 색만 칠합니다.
+   글자 하나 칠 때마다 다시 칠하므로 실시간으로 보이고,
+   태그는 띄어쓰기나 줄바꿈에서 저절로 끝납니다. */
+
+const TAG_SCAN = /(^|[\s(\[{"'])#([\p{L}\p{N}_/-]{1,50})/gu;
+let tagFrame = 0;
+
+function paintTags() {
+  if (typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight === 'undefined') return;
+  cancelAnimationFrame(tagFrame);
+  tagFrame = requestAnimationFrame(() => {
+    const ranges = [];
+    const walker = document.createTreeWalker(el.editor, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.nodeValue;
+      if (!text || !text.includes('#')) continue;
+      TAG_SCAN.lastIndex = 0;
+      let m;
+      while ((m = TAG_SCAN.exec(text))) {
+        if (/^\d+$/.test(m[2])) continue;            // #1 같은 숫자는 태그가 아닙니다
+        const start = m.index + m[1].length;
+        const r = new Range();
+        r.setStart(node, start);
+        r.setEnd(node, start + 1 + m[2].length);
+        ranges.push(r);
+      }
+    }
+    CSS.highlights.set('note-tag', new Highlight(...ranges));
+  });
+}
+
 /* ── 첨부 이미지 ───────────────────────────── */
 
 const attUrlCache = new Map();   // 첨부 id → blob 주소
@@ -115,6 +149,7 @@ async function loadIntoEditor(note, { keepScroll = false } = {}) {
   editorBase = note.body;
   edited = false;
   if (keepScroll) el.editor.scrollTop = top;
+  paintTags();
 }
 
 /* ── 공통 ──────────────────────────────────── */
@@ -700,8 +735,6 @@ function applyFormat(cmd) {
     }
   } else if (cmd === 'todo') {
     toggleTodo();
-  } else if (cmd === 'tag') {
-    document.execCommand('insertText', false, '#');
   } else if (cmd === 'undo' || cmd === 'redo') {
     document.execCommand(cmd);
   } else if (cmd === 'removeFormat') {
@@ -712,6 +745,7 @@ function applyFormat(cmd) {
   }
 
   edited = true;
+  paintTags();
   syncToolbarState();
   queueSave();
 }
@@ -927,17 +961,9 @@ on('editor', 'paste', e => {
   insertImages(imgs);
 });
 
-on('editor', 'input', () => { edited = true; repairTodos(); queueSave(); });
+on('editor', 'input', () => { edited = true; repairTodos(); paintTags(); queueSave(); });
 on('editor', 'blur', flushSave);
-
-// 스페이스나 엔터를 친 순간 태그에 색을 입힙니다 (커서가 흔들리지 않는 시점)
-on('editor', 'keyup', e => {
-  if (readOnly) return;
-  if (e.key === ' ' || e.key === 'Enter') {
-    try { highlightTagAtCaret(el.editor); } catch {}
-  }
-  syncToolbarState();
-});
+on('editor', 'keyup', syncToolbarState);
 on('editor', 'mouseup', syncToolbarState);
 on('editor', 'focus', syncToolbarState);
 

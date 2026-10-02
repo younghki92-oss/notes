@@ -135,8 +135,7 @@ function mdInline(text, attUrls) {
   t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
   t = t.replace(/==([^=\n]+)==/g, '<mark>$1</mark>');
   t = t.replace(/&lt;u&gt;([\s\S]*?)&lt;\/u&gt;/g, '<u>$1</u>');
-  t = t.replace(TAG_RE, (m, p, tag) =>
-    /^\d+$/.test(tag) ? m : `${p}<span class="tag">#${tag}</span>`);
+  // 태그는 글자를 감싸지 않습니다. 화면에 색만 칠합니다 (app.js 의 paintTags)
   return t || '<br>';
 }
 

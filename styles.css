@@ -4,7 +4,7 @@
    ───────────────────────────────────────────── */
 
 :root {
-  --build: 'v24';
+  --build: 'v25';
   --paper:      #FCFCFA;
   --paper-2:    #F4F3EF;
   --ink:        #1C1D1A;
@@ -496,6 +496,12 @@ button { cursor: pointer; }
   display: block;
   margin: 1em 0;
 }
+/* 태그: 글자 위에 형광펜처럼 칠합니다 (글자는 감싸지 않습니다) */
+::highlight(note-tag) {
+  background-color: var(--tag-bg);
+  color: var(--accent);
+}
+
 .editor .tag {
   background: var(--tag-bg);
   color: var(--accent);
