@@ -16,7 +16,7 @@ const $ = id => document.getElementById(id);
 /* ── 문제가 생기면 화면에 보여 줍니다 ─────────
    (버튼이 조용히 먹통이 되는 것보다 낫습니다) */
 
-const BUILD = 'v23';
+const BUILD = 'v24';
 const missingIds = [];
 
 /** styles.css 가 같은 버전인지 확인합니다. 파일이 섞여 올라간 걸 잡아냅니다. */
@@ -422,10 +422,10 @@ function setDot(stateName, label) {
 }
 
 async function updateSyncBadge() {
-  if (drive.state.syncing) {
+  if (drive.state.syncing && drive.state.phase) {
     const p = drive.state.total
       ? `${drive.state.phase} ${drive.state.done}/${drive.state.total}`
-      : (drive.state.phase || '동기화 중');
+      : drive.state.phase;
     return setDot('syncing', p);
   }
   if (!drive.wasConnected()) return setDot('off', '연결 안 됨');
@@ -438,7 +438,7 @@ async function updateSyncBadge() {
   setDot('ok', last ? `동기화 ${when(last)}` : '연결됨');
 }
 
-function scheduleSync(delay = 4000) {
+function scheduleSync(delay = 1500) {
   if (!drive.wasConnected()) return;
   if (drive.state.syncing) return;
   clearTimeout(syncTimer);
@@ -489,7 +489,7 @@ async function runSync(interactive) {
     await flushSave();                     // 쓰던 글부터 저장
     await updateSyncBadge();
     await keepAwake(true);
-    const r = await drive.sync({ interactive });
+    const r = await drive.sync({ interactive, full: interactive || drive.fullSyncDue() });
     if (!r) return;
     await reload();
     await refreshOpenNote();
@@ -1195,7 +1195,16 @@ window.addEventListener('pagehide', () => {
   if (db.canon(body) !== db.canon(editorBase)) db.saveBody(current, body);
 });
 
-setInterval(() => { if (document.visibilityState === 'visible') scheduleSync(0); }, 180_000);
+// 화면이 켜져 있는 동안 10초마다 "바뀐 거 있나?" 를 묻습니다.
+// 바뀐 게 없으면 드라이브에 질문 한 번이라 가볍습니다.
+setInterval(() => {
+  if (document.visibilityState !== 'visible') return;
+  if (!navigator.onLine || drive.state.syncing) return;
+  scheduleSync(0);
+}, 10_000);
+
+// 다른 창에서 돌아오면 바로 확인합니다
+window.addEventListener('focus', () => scheduleSync(300));
 
 /* ── 시작 ─────────────────────────────────── */
 

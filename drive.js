@@ -168,8 +168,9 @@ async function checkRes(res) {
 
 /* ── 폴더 ──────────────────────────────────── */
 
-async function ensureFolder() {
+async function ensureFolder(verify = true) {
   const cached = await db.metaGet('folderId');
+  if (cached && !verify) return cached;      // 빠른 확인에서는 폴더 확인을 생략합니다
   if (cached) {
     try {
       const r = await api(`${API}/files/${cached}?fields=id,trashed`);
@@ -451,6 +452,42 @@ export async function wipeRemote() {
   return removed;
 }
 
+/* ── "지난번 이후 바뀐 것만" 묻기 ───────────────
+   노트 896개 목록을 통째로 받는 대신, 드라이브에
+   "이 표시 이후로 바뀐 파일만 알려 줘" 라고 묻습니다.
+   아무것도 안 바뀌었으면 요청 한 번으로 끝납니다. */
+
+async function getStartToken() {
+  const j = await (await api(`${API}/changes/startPageToken`)).json();
+  return j.startPageToken;
+}
+
+async function listChanges(token, folderId) {
+  const changed = new Map();
+  const removed = new Set();
+  let page = token, newStart = null;
+  while (page) {
+    const url = `${API}/changes?pageToken=${encodeURIComponent(page)}`
+      + `&pageSize=500&includeRemoved=true&spaces=drive`
+      + `&fields=nextPageToken,newStartPageToken,`
+      + `changes(fileId,removed,file(id,name,modifiedTime,appProperties,parents,trashed))`;
+    const j = await (await api(url)).json();
+    for (const c of j.changes || []) {
+      const f = c.file;
+      if (c.removed || !f || f.trashed) { removed.add(c.fileId); changed.delete(c.fileId); continue; }
+      if (!f.parents || !f.parents.includes(folderId)) continue;   // 이 앱 폴더 밖의 파일
+      changed.set(f.id, f);
+      removed.delete(f.id);
+    }
+    page = j.nextPageToken || null;
+    if (j.newStartPageToken) newStart = j.newStartPageToken;
+  }
+  return { changed, removed, newStart };
+}
+
+let lastFullSync = 0;
+export const fullSyncDue = () => Date.now() - lastFullSync > 30 * 60_000;
+
 /** 한 번에 여러 건을 처리합니다. 800개를 하나씩 올리면 너무 느립니다. */
 async function pool(items, limit, worker, onTick) {
   let i = 0, done = 0;
@@ -472,7 +509,7 @@ async function pool(items, limit, worker, onTick) {
  * 한 번의 동기화. 되도록 자주 불러도 안전하도록 만들었습니다.
  * @returns {{pushed:number, pulled:number, conflicts:number, deleted:number}}
  */
-export async function sync({ interactive = false } = {}) {
+export async function sync({ interactive = false, full = false } = {}) {
   if (state.syncing) return null;
   if (!navigator.onLine) throw new Error('오프라인입니다. 연결되면 자동으로 올립니다.');
 
@@ -496,24 +533,55 @@ export async function sync({ interactive = false } = {}) {
       if (!interactive) { silentFailedAt = Date.now(); state.needsReconnect = true; }
       throw e;
     }
-    progress('목록 읽는 중');
-    const folderId = await ensureFolder();
+    const token = full ? null : await db.metaGet('changesToken');
+    const folderId = await ensureFolder(!token);
 
-    // 1) 원격 목록
-    const remote = new Map();   // noteId 또는 file.id → file
-    const remoteIds = new Set(); // 지우기 판단용 (그림 포함 전체)
+    // 1) 원격에서 무엇이 바뀌었나
+    let remote = new Map();      // file.id → file
+    const remoteIds = new Set(); // 지우기 판단용 (전체 목록일 때만)
+    let removedIds = new Set();  // 빠른 확인에서 "지워졌다"고 알려 온 파일
     let listingComplete = false;
     let remoteSeen = 0;
-    let pageToken = null;
-    do {
-      const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
-      const url = `${API}/files?q=${q}&fields=nextPageToken,files(id,name,modifiedTime,appProperties)`
-        + `&pageSize=200${pageToken ? '&pageToken=' + pageToken : ''}`;
-      const j = await (await api(url)).json();
-      for (const f of j.files || []) { remote.set(f.id, f); remoteIds.add(f.id); remoteSeen++; }
-      pageToken = j.nextPageToken || null;
-    } while (pageToken);
-    listingComplete = true;
+    let nextToken = null;
+
+    let quick = false;
+    if (token) {
+      try {
+        const ch = await listChanges(token, folderId);
+        remote = ch.changed;
+        removedIds = ch.removed;
+        nextToken = ch.newStart;
+        quick = true;
+      } catch {
+        await db.metaSet('changesToken', null);   // 표시가 낡았으면 전체 확인으로
+      }
+    }
+
+    if (quick) {
+      // 양쪽 다 바뀐 게 없으면 여기서 끝 (요청 한 번)
+      const localDirty = (await db.allRows()).some(n => n.dirty);
+      const filesDirty = (await db.dirtyFiles()).length > 0;
+      if (!remote.size && !removedIds.size && !localDirty && !filesDirty) {
+        if (nextToken) await db.metaSet('changesToken', nextToken);
+        state.lastSync = Date.now();
+        await db.metaSet('lastSync', state.lastSync);
+        return tally;
+      }
+    } else {
+      // 전체 확인: 처음이거나, 30분마다 한 번, 직접 눌렀을 때
+      progress('목록 읽는 중');
+      nextToken = await getStartToken();   // 목록을 읽기 '전'에 받아 두어야 그 사이 변경을 놓치지 않습니다
+      let pageToken = null;
+      do {
+        const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
+        const url = `${API}/files?q=${q}&fields=nextPageToken,files(id,name,modifiedTime,appProperties)`
+          + `&pageSize=200${pageToken ? '&pageToken=' + pageToken : ''}`;
+        const j = await (await api(url)).json();
+        for (const f of j.files || []) { remote.set(f.id, f); remoteIds.add(f.id); remoteSeen++; }
+        pageToken = j.nextPageToken || null;
+      } while (pageToken);
+      listingComplete = true;
+    }
 
     // 그림 파일은 따로 다룹니다.
     const remoteAtts = [];
@@ -555,11 +623,12 @@ export async function sync({ interactive = false } = {}) {
     // 2) 삭제(무덤) 먼저 처리
     for (const n of local) {
       if (!n.deleted || !n.dirty) continue;
-      if (n.driveId && remote.has(n.driveId)) {
+      // 빠른 확인에서는 목록에 바뀐 것만 있으니, 드라이브 id 가 있으면 무조건 지웁니다
+      if (n.driveId && (quick || remote.has(n.driveId))) {
         try {
           await api(`${API}/files/${n.driveId}`, { method: 'DELETE' });
-          remote.delete(n.driveId);
         } catch (e) { if (!/404/.test(e.message)) throw e; }
+        remote.delete(n.driveId);
       }
       for (const att of (await db.allFiles()).filter(a => a.noteId === n.id)) {
         if (att.driveId) {
@@ -715,6 +784,19 @@ export async function sync({ interactive = false } = {}) {
       }
     }
 
+    // 3-3) 빠른 확인에서 "지워졌다"고 알려 온 노트
+    if (removedIds.size) {
+      for (const n of await db.allRows()) {
+        if (!n.driveId || !removedIds.has(n.driveId)) continue;
+        if (n.deleted || n.dirty) continue;      // 여기서 고친 중이면 지우지 않고 다시 올립니다
+        for (const att of (await db.allFiles()).filter(a => a.noteId === n.id)) {
+          await db.purgeFile(att.id);
+        }
+        await db.purge(n.id);
+        tally.deleted++;
+      }
+    }
+
     // 4) 아직 드라이브에 없는 로컬 노트 올리기
     const toPush = (await db.allRows()).filter(n =>
       !n.deleted && n.dirty && !(n.driveId && remote.has(n.driveId)));
@@ -732,6 +814,8 @@ export async function sync({ interactive = false } = {}) {
         (d, t) => progress('그림 올리는 중', d, t));
     }
 
+    if (nextToken) await db.metaSet('changesToken', nextToken);
+    if (!quick) lastFullSync = Date.now();
     state.lastSync = Date.now();
     await db.metaSet('lastSync', state.lastSync);
     return tally;
